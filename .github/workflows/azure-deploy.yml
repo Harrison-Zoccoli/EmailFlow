@@ -22,12 +22,20 @@ jobs:
     - name: Create necessary files
       run: |
         echo "${{ secrets.CREDENTIALS_JSON }}" > credentials.json
+        echo "Validating credentials.json..."
+        python -c "import json; json.load(open('credentials.json'))"
         echo "${{ secrets.ENV_FILE }}" > .env
         echo "${{ secrets.FIREBASE_KEY }}" > firebase-key.json
+        echo "Validating firebase-key.json..."
+        python -c "import json; json.load(open('firebase-key.json'))"
         chmod +x startup.sh
+        ls -la  # Debug: List all files before deployment
+        echo "Python files:"
+        find . -name "*.py"
 
     - name: Deploy to Azure Web App
       uses: azure/webapps-deploy@v2
       with:
         app-name: 'mailflow-webapp'
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }} 
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: . 
