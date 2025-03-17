@@ -70,3 +70,5 @@ node_modules/
 firebase-key.json
 credentials.json
 .env
+credentials.json
+.env

@@ -126,11 +126,22 @@
                         <span class="text-sm text-gray-500">${email.date}</span>
                     </div>
                     <p class="mt-2 text-gray-600">${email.snippet}</p>
-                    <div class="mt-4">
-                        <button onclick="markAsRead('${email.message_id}', this)"
-                                class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200">
-                            Mark as Read
-                        </button>
+                    <div class="mt-4 flex items-center justify-between">
+                        <div class="flex items-center space-x-4">
+                            <button onclick="markAsRead('${email.message_id}', this)"
+                                    class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200">
+                                Mark as Read
+                            </button>
+                            <div class="flex items-center space-x-2">
+                                <label class="text-sm text-gray-600">Contest Rating:</label>
+                                <input type="number" 
+                                       min="1" 
+                                       max="10" 
+                                       class="w-16 px-2 py-1 border border-gray-300 rounded-md text-sm"
+                                       placeholder="1-10"
+                                       onchange="if(this.value > 10) this.value = 10; if(this.value < 1) this.value = 1;">
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
