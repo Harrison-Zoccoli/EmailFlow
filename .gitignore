@@ -72,3 +72,6 @@ credentials.json
 .env
 credentials.json
 .env
+credentials.json
+firebase-key.json
+.env
