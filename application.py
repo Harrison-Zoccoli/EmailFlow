@@ -1,8 +1,10 @@
-# This is the entry point for Azure
-from app import app, socketio
+from flask import Flask
 
-# Create the WSGI application object
-application = app
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return 'Hello from Azure!'
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=8000)
+    app.run(host='0.0.0.0', port=8000)
