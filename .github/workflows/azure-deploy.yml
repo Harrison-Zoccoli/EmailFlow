@@ -24,6 +24,7 @@ jobs:
         echo "${{ secrets.CREDENTIALS_JSON }}" > credentials.json
         echo "${{ secrets.ENV_FILE }}" > .env
         echo "${{ secrets.FIREBASE_KEY }}" > firebase-key.json
+        chmod +x startup.sh
 
     - name: Deploy to Azure Web App
       uses: azure/webapps-deploy@v2
