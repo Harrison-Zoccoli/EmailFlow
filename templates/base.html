@@ -25,9 +25,9 @@
                 <div class="flex items-center space-x-4">
                     {% if session.user_email %}
                     <span class="nav-text text-sm">{{ session.user_email }}</span>
-                    <a href="/logout" class="bg-[#FFF2F2] text-[#2D3657] hover:bg-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200">Logout</a>
+                    <a href="/logout" class="bg-[#FFF2F2] text-white hover:bg-white hover:text-[#2D3657] px-4 py-2 rounded-md text-sm font-medium transition-all duration-200">Logout</a>
                     {% else %}
-                    <a href="/login" class="bg-[#FFF2F2] text-[#2D3657] hover:bg-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200">Login</a>
+                    <a href="/login" class="bg-[#FFF2F2] text-white hover:bg-white hover:text-[#2D3657] px-4 py-2 rounded-md text-sm font-medium transition-all duration-200">Login</a>
                     {% endif %}
                 </div>
             </div>
@@ -37,12 +37,6 @@
     <main class="flex-grow">
         {% block content %}{% endblock %}
     </main>
-
-    <footer class="bg-[#2D3657] text-[#FFF2F2] mt-auto">
-        <div class="max-w-7xl mx-auto py-6 px-4">
-            <p class="text-center">© 2025 EmailFlow. All rights reserved.</p>
-        </div>
-    </footer>
 
     {% block scripts %}{% endblock %}
 </body>

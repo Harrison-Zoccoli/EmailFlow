@@ -4,6 +4,21 @@ body {
     padding: 0;
 }
 
+/* Scroll Snapping */
+.home-page main {
+    height: 100vh;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+}
+
+.snap-section {
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+}
+
 /* Section backgrounds */
 .hero-section {
     background: none;
