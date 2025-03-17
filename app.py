@@ -9,6 +9,7 @@ from flask_socketio import SocketIO, emit
 from functools import wraps
 import logging
 import requests
+import google_auth_oauthlib
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
@@ -240,6 +241,30 @@ def mark_message_as_read(message_id):
     except Exception as e:
         logger.error(f"Error in mark_as_read route: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/oauth2callback')
+def oauth2callback():
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        CREDENTIALS_FILE,
+        scopes=SCOPES,
+        state=session['state']
+    )
+    flow.redirect_uri = f'{AZURE_URL}/oauth2callback'
+    
+    authorization_response = request.url
+    flow.fetch_token(authorization_response=authorization_response)
+    
+    credentials = flow.credentials
+    session['credentials'] = {
+        'token': credentials.token,
+        'refresh_token': credentials.refresh_token,
+        'token_uri': credentials.token_uri,
+        'client_id': credentials.client_id,
+        'client_secret': credentials.client_secret,
+        'scopes': credentials.scopes
+    }
+    
+    return redirect(url_for('monitor'))
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000) 

@@ -12,4 +12,7 @@ TOKEN_FILE = 'token.json'
 CLIENT_ID = os.getenv('CLIENT_ID')
 AZURE_OPENAI_KEY = os.getenv('AZURE_OPENAI_KEY')
 AZURE_OPENAI_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT')
-AZURE_OPENAI_DEPLOYMENT = os.getenv('AZURE_OPENAI_DEPLOYMENT') 
+AZURE_OPENAI_DEPLOYMENT = os.getenv('AZURE_OPENAI_DEPLOYMENT')
+
+# Azure deployment URL (you'll need to update this)
+AZURE_URL = "https://mailflow-webapp-hvb6a9c6hya7akdy.canadacentral-01.azurewebsites.net" 

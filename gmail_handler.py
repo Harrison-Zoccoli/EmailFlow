@@ -8,7 +8,7 @@ import base64
 from email.mime.text import MIMEText
 import json
 import time
-from config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE, AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
+from config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE, AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_URL
 from ai_scorer import AIScorer
 import logging
 from datetime import datetime, timedelta
@@ -31,7 +31,7 @@ class GmailHandler:
         self.setup_credentials()
 
     def setup_credentials(self):
-        """Set up Gmail API credentials with forced new authentication"""
+        """Set up Gmail API credentials"""
         try:
             # Clear any existing credentials
             self.creds = None
@@ -41,25 +41,16 @@ class GmailHandler:
             flow = InstalledAppFlow.from_client_secrets_file(
                 CREDENTIALS_FILE, 
                 SCOPES,
-                redirect_uri='http://localhost:8090'
+                redirect_uri=f'{AZURE_URL}/oauth2callback'
             )
             
-            # Force new authentication every time
-            auth_url, _ = flow.authorization_url(
+            # Use redirect flow instead of local server
+            authorization_url, state = flow.authorization_url(
                 access_type='offline',
-                prompt='select_account consent',
-                include_granted_scopes='false'  # Don't include any previously granted scopes
+                include_granted_scopes='true'
             )
             
-            self.creds = flow.run_local_server(
-                port=8090,
-                authorization_prompt_message='Please select a Google account',
-                success_message='Authentication successful! You can close this window.',
-                open_browser=True
-            )
-            
-            self.service = build('gmail', 'v1', credentials=self.creds)
-            logger.info("Successfully set up new credentials")
+            return authorization_url
             
         except Exception as e:
             logger.error(f"Error setting up credentials: {str(e)}", exc_info=True)
