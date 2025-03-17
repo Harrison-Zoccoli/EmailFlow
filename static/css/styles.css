@@ -1,0 +1,122 @@
+/* Base styles */
+body {
+    margin: 0;
+    padding: 0;
+}
+
+/* Section backgrounds */
+.hero-section {
+    background: none;
+    color: white;
+}
+
+.how-it-works-section {
+    background: none;
+}
+
+.features-section {
+    background: none;
+}
+
+/* Make sections semi-transparent except hero */
+.how-it-works-section,
+.features-section {
+    background-color: rgba(0, 0, 0, 0.7);
+    position: relative;
+    z-index: 1;
+}
+
+/* How It Works cards */
+.step-card {
+    background-color: rgba(0, 0, 0, 0.3);
+    border-radius: 12px;
+    padding: 32px;
+}
+
+.step-number {
+    width: 40px;
+    height: 40px;
+    background-color: #3B82F6;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.step-title {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: white;
+}
+
+.step-description {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+.step-list {
+    list-style: none;
+    padding: 0;
+    margin: 16px 0 0 0;
+}
+
+.step-list li {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.step-list li::before {
+    content: "→";
+    margin-right: 8px;
+    color: #9BA5C9;
+}
+
+/* Navbar */
+nav {
+    position: fixed;
+    top: 0;
+    width: 100%;
+    z-index: 50;
+    background-color: #2D3657; /* Default solid background */
+    border-bottom: 1px solid rgba(155, 165, 201, 0.2);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Glassy navbar only for home page */
+.home-page nav {
+    background-color: rgba(45, 54, 87, 0.1);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+/* White text for home page navbar */
+.home-page nav .nav-text {
+    color: white;
+}
+
+/* Dark text for other pages */
+nav .nav-text {
+    color: #FFF2F2;
+}
+
+/* Spline container */
+.spline-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100vh;
+    z-index: -1;
+    overflow: hidden;
+}
+
+.spline-container canvas {
+    width: 100% !important;
+    height: 100% !important;
+} 

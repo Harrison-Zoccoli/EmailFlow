@@ -1,0 +1,13 @@
+# Sensitive files
+config.py
+credentials.json
+token.json
+firebase-key.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+venv/ 

@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}EmailFlow - Unread{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold text-gray-900">Unread Emails</h1>
+        <select id="timeFilter" 
+                class="block w-48 pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+                onchange="fetchUnreadEmails()">
+            <option value="hour">Past Hour</option>
+            <option value="day">Past Day</option>
+            <option value="week" selected>Past Week</option>
+            <option value="month">Past Month</option>
+        </select>
+    </div>
+
+    <!-- Progress Bar -->
+    <div id="progressContainer" class="mb-6 hidden">
+        <div class="flex justify-between mb-2">
+            <span class="text-sm font-medium text-gray-700" id="progressText">Processing emails...</span>
+            <span class="text-sm font-medium text-gray-700" id="progressCount">0/0</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
+            <div class="bg-blue-600 h-2.5 rounded-full" id="progressBar" style="width: 0%"></div>
+        </div>
+    </div>
+
+    <div id="emails" class="space-y-4"></div>
+</div>
+
+<script>
+    const emailsDiv = document.getElementById('emails');
+    const timeFilter = document.getElementById('timeFilter');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressCount = document.getElementById('progressCount');
+
+    function updateProgress(processed, total) {
+        const percentage = (processed / total) * 100;
+        progressBar.style.width = `${percentage}%`;
+        progressCount.textContent = `${processed}/${total}`;
+        
+        if (processed === total) {
+            setTimeout(() => {
+                progressContainer.classList.add('hidden');
+            }, 1000);
+        }
+    }
+
+    function fetchUnreadEmails() {
+        const filter = timeFilter.value;
+        emailsDiv.innerHTML = '';
+        progressContainer.classList.remove('hidden');
+        progressBar.style.width = '0%';
+        progressCount.textContent = '0/0';
+
+        fetch(`/unread_emails/${filter}`)
+            .then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                return new ReadableStream({
+                    start(controller) {
+                        function push() {
+                            reader.read().then(({done, value}) => {
+                                if (done) {
+                                    controller.close();
+                                    return;
+                                }
+
+                                const chunk = decoder.decode(value, {stream: true});
+                                const lines = chunk.split('\n').filter(line => line.trim());
+                                
+                                lines.forEach(line => {
+                                    try {
+                                        const data = JSON.parse(line);
+                                        if (data.type === 'email') {
+                                            addEmailToDisplay(data.data);
+                                            updateProgress(data.progress.processed, data.progress.total);
+                                        } else if (data.type === 'error') {
+                                            console.error('Error processing email');
+                                            updateProgress(data.progress.processed, data.progress.total);
+                                        }
+                                    } catch (e) {
+                                        console.error('Error parsing JSON:', e);
+                                    }
+                                });
+
+                                push();
+                            });
+                        }
+
+                        push();
+                    }
+                });
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                progressContainer.classList.add('hidden');
+                emailsDiv.innerHTML = '<p class="text-red-500 text-center py-8">Error loading emails. Please try again.</p>';
+            });
+    }
+
+    function addEmailToDisplay(email) {
+        const emailElement = document.createElement('div');
+        emailElement.className = 'bg-white shadow rounded-lg p-6 transform transition duration-200 hover:shadow-lg hover:scale-[1.02] hover:-translate-y-1 cursor-pointer';
+        emailElement.innerHTML = `
+            <div class="flex justify-between items-start">
+                <div class="flex-grow">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-sm font-medium text-gray-900">${email.sender}</p>
+                            <h3 class="mt-1 text-lg font-semibold text-gray-900">${email.subject}</h3>
+                            <div class="mt-1">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium 
+                                    ${email.importance.score >= 7 ? 'bg-red-100 text-red-800' : 
+                                      email.importance.score >= 4 ? 'bg-yellow-100 text-yellow-800' : 
+                                      'bg-green-100 text-green-800'}">
+                                    Priority: ${email.importance.score}/10
+                                </span>
+                                <p class="text-sm text-gray-500 mt-1">${email.importance.explanation}</p>
+                            </div>
+                        </div>
+                        <span class="text-sm text-gray-500">${email.date}</span>
+                    </div>
+                    <p class="mt-2 text-gray-600">${email.snippet}</p>
+                    <div class="mt-4">
+                        <button onclick="markAsRead('${email.message_id}', this)"
+                                class="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200">
+                            Mark as Read
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        emailsDiv.appendChild(emailElement);
+    }
+
+    function markAsRead(messageId, button) {
+        // Get the entire email container (the outermost div containing the email)
+        const emailContainer = button.closest('.shadow.rounded-lg');
+        if (!emailContainer) {
+            console.error('Could not find email container');
+            return;
+        }
+
+        // Disable button
+        button.disabled = true;
+        button.innerHTML = 'Marking as read...';
+        
+        fetch(`/mark_as_read/${messageId}`, {
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                // Add fade-out animation to the entire container
+                emailContainer.style.transition = 'all 0.3s ease';
+                emailContainer.style.opacity = '0';
+                emailContainer.style.transform = 'translateY(-10px)';
+                emailContainer.style.maxHeight = '0';
+                emailContainer.style.margin = '0';
+                emailContainer.style.padding = '0';
+                
+                // Remove the entire container after animation
+                setTimeout(() => {
+                    emailContainer.remove();
+                    
+                    // Show "no emails" message if this was the last one
+                    if (emailsDiv.children.length === 0) {
+                        emailsDiv.innerHTML = '<p class="text-gray-500 text-center py-8">No unread emails found for this time period.</p>';
+                    }
+                }, 300);
+            } else {
+                button.disabled = false;
+                button.innerHTML = 'Mark as Read';
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            button.disabled = false;
+            button.innerHTML = 'Mark as Read';
+        });
+    }
+
+    // Initial load
+    fetchUnreadEmails();
+</script>
+{% endblock %} 

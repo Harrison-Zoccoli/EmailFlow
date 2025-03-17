@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}EmailFlow{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="flex flex-col min-h-screen {% if request.endpoint == 'home' %}home-page{% endif %}">
+    <!-- Glassy Navbar -->
+    <nav>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex h-16 items-center">
+                <div class="flex-shrink-0">
+                    <a href="/" class="text-2xl font-bold nav-text drop-shadow-sm">EmailFlow</a>
+                </div>
+                <div class="hidden md:flex flex-1 justify-center">
+                    <div class="ml-10 flex items-center space-x-6">
+                        <a href="/" class="nav-text hover:text-[#9BA5C9] px-3 py-2 rounded-md text-sm font-medium">Home</a>
+                        <a href="/monitor" class="nav-text hover:text-[#9BA5C9] px-3 py-2 rounded-md text-sm font-medium">Monitor</a>
+                        <a href="/unread" class="nav-text hover:text-[#9BA5C9] px-3 py-2 rounded-md text-sm font-medium">Unread</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    {% if session.user_email %}
+                    <span class="nav-text text-sm">{{ session.user_email }}</span>
+                    <a href="/logout" class="bg-[#FFF2F2] text-[#2D3657] hover:bg-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200">Logout</a>
+                    {% else %}
+                    <a href="/login" class="bg-[#FFF2F2] text-[#2D3657] hover:bg-white px-4 py-2 rounded-md text-sm font-medium transition-all duration-200">Login</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="bg-[#2D3657] text-[#FFF2F2] mt-auto">
+        <div class="max-w-7xl mx-auto py-6 px-4">
+            <p class="text-center">© 2025 EmailFlow. All rights reserved.</p>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html> 

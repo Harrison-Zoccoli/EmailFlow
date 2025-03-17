@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}EmailFlow - Monitor{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+    <h1 class="text-3xl font-bold text-gray-900">Email Monitor</h1>
+    <div class="mt-6">
+        <div id="emails" class="space-y-4"></div>
+    </div>
+</div>
+
+<script>
+    const socket = io();
+    const emailsDiv = document.getElementById('emails');
+
+    // Display existing emails on load
+    fetch('/emails')
+        .then(response => response.json())
+        .then(emails => {
+            console.log('Loaded existing emails:', emails);
+            emails.forEach(email => addEmailToDisplay(email));
+        })
+        .catch(error => console.error('Error loading emails:', error));
+
+    // Listen for new emails
+    socket.on('new_email', function(email) {
+        console.log('Received new email:', email);
+        addEmailToDisplay(email);
+    });
+
+    socket.on('connect', () => {
+        console.log('Connected to WebSocket');
+    });
+
+    socket.on('disconnect', () => {
+        console.log('Disconnected from WebSocket');
+    });
+
+    function addEmailToDisplay(email) {
+        const emailElement = document.createElement('div');
+        emailElement.className = 'bg-white shadow rounded-lg p-6';
+        emailElement.innerHTML = `
+            <div class="flex justify-between items-start">
+                <div>
+                    <p class="text-sm font-medium text-gray-900">${email.sender}</p>
+                    <h3 class="mt-1 text-lg font-semibold text-gray-900">${email.subject}</h3>
+                    <div class="mt-1">
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium 
+                            ${email.importance.score >= 7 ? 'bg-red-100 text-red-800' : 
+                              email.importance.score >= 4 ? 'bg-yellow-100 text-yellow-800' : 
+                              'bg-green-100 text-green-800'}">
+                            Priority: ${email.importance.score}/10
+                        </span>
+                        <p class="text-sm text-gray-500 mt-1">${email.importance.explanation}</p>
+                    </div>
+                </div>
+                <span class="text-sm text-gray-500">${email.date}</span>
+            </div>
+            <p class="mt-2 text-gray-600">${email.snippet}</p>
+        `;
+        emailsDiv.insertBefore(emailElement, emailsDiv.firstChild);
+    }
+</script>
+{% endblock %} 
