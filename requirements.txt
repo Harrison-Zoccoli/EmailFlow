@@ -8,3 +8,6 @@ python-dotenv
 flask-socketio==5.1.1
 gunicorn
 eventlet
+openai>=1.0.0
+dnspython
+python-engineio>=4.0.0
