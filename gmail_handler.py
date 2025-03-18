@@ -8,12 +8,17 @@ import base64
 from email.mime.text import MIMEText
 import json
 import time
-from config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE, AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT, AZURE_URL
+from config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE, AZURE_URL
 from ai_scorer import AIScorer
 import logging
 from datetime import datetime, timedelta
 from flask import session
 from user_manager import UserManager
+import google_auth_oauthlib.flow
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,7 +32,14 @@ class GmailHandler:
         self.creds = None
         self.service = None
         self.last_history_id = None
-        self.ai_scorer = AIScorer(AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT)
+        
+        # Hardcode values directly (for testing)
+        self.ai_scorer = AIScorer(
+            "DoOzggQ4kLh4CmF8P5YFqEbCefnfYy9Qe1lBAw4jOcD3AyJjK8rLJQQJ99BCACYeBjFXJ3w3AAABACOGCYKL",
+            "https://mailflow-openai.openai.azure.com/",
+            "emailflow-openai"  # Use exact name from test
+        )
+        print(f"Created AIScorer with deployment: emailflow-openai")
         self.setup_credentials()
 
     def setup_credentials(self):
@@ -44,17 +56,36 @@ class GmailHandler:
                 redirect_uri=f'{AZURE_URL}/oauth2callback'
             )
             
-            # Use redirect flow instead of local server
-            authorization_url, state = flow.authorization_url(
-                access_type='offline',
-                include_granted_scopes='true'
-            )
-            
-            return authorization_url
+            # For local development
+            if 'localhost' in AZURE_URL or '127.0.0.1' in AZURE_URL:
+                # Use local server flow
+                self.creds = flow.run_local_server(
+                    port=8090,
+                    authorization_prompt_message='Please select a Google account',
+                    success_message='Authentication successful! You can close this window.',
+                    open_browser=True
+                )
+                
+                self.service = build('gmail', 'v1', credentials=self.creds)
+                
+                # Check if user exists in database
+                email = self.get_user_email()
+                if not user_manager.user_exists(email):
+                    return "new_user"
+                
+                logger.info("Successfully set up credentials")
+                return None
+            else:
+                # For production, use redirect flow
+                authorization_url, state = flow.authorization_url(
+                    access_type='offline',
+                    include_granted_scopes='true'
+                )
+                return authorization_url
             
         except Exception as e:
-            logger.error(f"Error setting up credentials: {str(e)}", exc_info=True)
-            raise
+            logger.error(f"Error setting up credentials: {str(e)}")
+            return str(e)
 
     def setup_push_notifications(self):
         """Set up Gmail API push notifications"""
@@ -155,13 +186,15 @@ class GmailHandler:
         return new_messages
 
     def get_user_email(self):
-        """Get the email of the authenticated user"""
+        """Get user's email address"""
         try:
             profile = self.service.users().getProfile(userId='me').execute()
-            return profile['emailAddress']
+            email = profile['emailAddress']
+            logger.info(f"Retrieved email: {email}")
+            return email
         except Exception as e:
-            print(f"Error getting user email: {str(e)}")
-            return None 
+            logger.error(f"Error getting user email: {str(e)}")
+            return None
 
     def get_filtered_unread_emails(self, timeframe):
         """Get unread emails within timeframe and process them one by one"""
