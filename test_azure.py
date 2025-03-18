@@ -1,9 +1,13 @@
 from openai import AzureOpenAI
 import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Get values from .env file
-api_key = "DoOzggQ4kLh4CmF8P5YFqEbCefnfYy9Qe1lBAw4jOcD3AyJjK8rLJQQJ99BCACYeBjFXJ3w3AAABACOGCYKL"
-api_endpoint = "https://mailflow-openai.openai.azure.com/"
+api_key = os.getenv('AZURE_OPENAI_KEY')
+api_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
 deployment = "emailflow-openai"  # Your deployment name
 
 print(f"Attempting to connect to Azure OpenAI...")

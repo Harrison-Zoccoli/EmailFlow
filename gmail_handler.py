@@ -33,11 +33,11 @@ class GmailHandler:
         self.service = None
         self.last_history_id = None
         
-        # Hardcode values directly (for testing)
+        # Use environment variables instead of hardcoded keys
         self.ai_scorer = AIScorer(
-            "DoOzggQ4kLh4CmF8P5YFqEbCefnfYy9Qe1lBAw4jOcD3AyJjK8rLJQQJ99BCACYeBjFXJ3w3AAABACOGCYKL",
-            "https://mailflow-openai.openai.azure.com/",
-            "emailflow-openai"  # Use exact name from test
+            os.getenv('AZURE_OPENAI_KEY'),
+            os.getenv('AZURE_OPENAI_ENDPOINT'),
+            "emailflow-openai"  # Keep this hardcoded since it works
         )
         print(f"Created AIScorer with deployment: emailflow-openai")
         self.setup_credentials()
