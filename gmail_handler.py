@@ -366,83 +366,76 @@ class GmailHandler:
                 service._http.close() 
 
     def check_for_new_emails(self):
-        """Check for new emails using Gmail API history
+        """Check for new emails and process them
         
         Returns:
-            bool: True if new emails were found, False otherwise
+            bool: True if new emails were found and processed, False otherwise
         """
         try:
-            print("\n==== CHECKING FOR NEW EMAILS ====")
-            
-            # Get the current user's email
+            # Get the user's email address
             user_email = self.get_user_email()
             if not user_email:
-                logger.error("Failed to get user email")
+                logger.error("Could not retrieve user email")
                 return False
             
             # Get the current history ID
-            profile = self.service.users().getProfile(userId='me').execute()
-            current_history_id = profile.get('historyId')
-            print(f"Current history ID: {current_history_id}")
+            current_history_id = self.get_latest_history_id()
+            if not current_history_id:
+                logger.error("Could not retrieve history ID")
+                return False
             
-            # Get the last history ID for this user from our in-memory dictionary
+            # Get the last history ID for this user
             last_history_id = GmailHandler.user_history_ids.get(user_email)
-            print(f"Last history ID: {last_history_id}")
             
-            # If this is the first check, just store the history ID and return
+            # If this is the first check, store the history ID and return
             if not last_history_id:
-                print("First check - storing history ID for future reference")
+                logger.info(f"First check - storing history ID for future reference")
                 GmailHandler.user_history_ids[user_email] = current_history_id
                 return False
             
             # If the history ID hasn't changed, no new emails
             if current_history_id == last_history_id:
-                print("No changes in history ID - no new emails")
+                # Reduce verbosity - don't log this message
+                # logger.info(f"No changes in history ID - no new emails")
                 return False
+            
+            # History ID has changed, check for new messages
+            logger.info(f"History ID changed from {last_history_id} to {current_history_id}")
             
             # Get history since last check
             history_results = self.service.users().history().list(
                 userId='me', 
-                startHistoryId=last_history_id,
-                historyTypes=['messageAdded']
+                startHistoryId=last_history_id
             ).execute()
             
-            # Check if there are any new messages
-            history = history_results.get('history', [])
-            
-            if not history:
-                print("No new messages in history")
-                # Update the history ID even if no new messages
-                GmailHandler.user_history_ids[user_email] = current_history_id
-                return False
-            
-            print(f"Found {len(history)} history entries with changes")
-            
-            # Process each history entry
-            new_messages_found = False
-            for item in history:
-                messages_added = item.get('messagesAdded', [])
-                for message_added in messages_added:
-                    message = message_added.get('message', {})
-                    message_id = message.get('id')
-                    
-                    # Skip if not a new message (e.g., label changes)
-                    if not message_id:
-                        continue
-                    
-                    # Process the new message
-                    print(f"Processing new message: {message_id}")
-                    self.process_message(message_id)
-                    new_messages_found = True
-            
-            # Update the history ID after processing
+            # Update the stored history ID
             GmailHandler.user_history_ids[user_email] = current_history_id
             
-            return new_messages_found
+            # Check if there are any history records
+            if 'history' not in history_results:
+                logger.info("No history records found")
+                return False
+            
+            # Process new messages
+            new_message_ids = set()
+            for history in history_results.get('history', []):
+                for message_added in history.get('messagesAdded', []):
+                    msg = message_added.get('message', {})
+                    if 'INBOX' in msg.get('labelIds', []):
+                        new_message_ids.add(msg.get('id'))
+            
+            # Process each new message
+            if new_message_ids:
+                logger.info(f"Found {len(new_message_ids)} new messages")
+                for message_id in new_message_ids:
+                    self.process_message(message_id)
+                return True
+            else:
+                logger.info("No new inbox messages found in history")
+                return False
             
         except Exception as e:
             logger.error(f"Error checking for new emails: {str(e)}")
-            print(f"Error checking for new emails: {str(e)}")
             return False
 
     def get_latest_history_id(self):
@@ -541,23 +534,38 @@ class GmailHandler:
             # Get snippet
             snippet = message.get('snippet', '')
             
+            # Get the current user's email
+            user_email = self.get_user_email()
+            
+            # Get user data from database
+            user_data = user_manager.get_user(user_email)
+            
+            # Check if user has enhanced AI model enabled
+            ai_settings = user_data.get('ai_settings', {})
+            selected_model = ai_settings.get('selected_model', 'standard')
+            
+            # Get user profile if enhanced model is selected
+            user_profile = None
+            if selected_model == 'enhanced':
+                profile = ai_settings.get('profile', {})
+                if profile.get('training_status') == 'completed':
+                    user_profile = profile.get('profile_text')
+            
             # Score the email importance
             importance = self.ai_scorer.score_email({
                 'sender': sender,
                 'subject': subject,
                 'snippet': snippet
-            })
+            }, user_profile)
             
             print(f"Email from {sender}")
             print(f"Subject: {subject}")
             print(f"Importance score: {importance['score']}/10 - {importance['explanation']}")
+            print(f"Model used: {selected_model}")
             
             # If importance score is high (7 or above), send SMS notification
             if importance['score'] >= 7:
                 print(f"High importance email detected! Score: {importance['score']}/10")
-                
-                # Get the current user's email
-                user_email = self.get_user_email()
                 
                 # Get user's phone number from database
                 user_data = user_manager.get_user(user_email)

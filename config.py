@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+#config structure
 
 load_dotenv()  # Load environment variables from .env file
 

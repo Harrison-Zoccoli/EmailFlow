@@ -2,6 +2,8 @@ from openai import AzureOpenAI
 import os
 from dotenv import load_dotenv
 
+#ignore this file its for testing occasionaly
+
 # Load environment variables
 load_dotenv()
 

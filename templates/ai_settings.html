@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block title %}EmailFlow - AI Settings{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+    <h1 class="text-3xl font-bold text-gray-900 mb-6">AI Settings</h1>
+    
+    <div class="bg-white shadow overflow-hidden sm:rounded-lg mb-8">
+        <div class="px-4 py-5 sm:px-6">
+            <h2 class="text-lg font-medium text-gray-900">Email Analysis Model</h2>
+            <p class="mt-1 max-w-2xl text-sm text-gray-500">Choose which AI model to use for analyzing your emails.</p>
+        </div>
+        <div class="border-t border-gray-200 px-4 py-5 sm:p-6">
+            <div class="space-y-6">
+                <div class="flex items-center">
+                    <input id="standard-model" name="model-selection" type="radio" class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500" 
+                           {% if ai_settings.selected_model == 'standard' %}checked{% endif %}>
+                    <label for="standard-model" class="ml-3 block text-sm font-medium text-gray-700">
+                        Standard Model
+                    </label>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500 ml-7">
+                        The standard model analyzes each email independently based on general importance factors.
+                        It does not use any personalized information about you or your email habits.
+                    </p>
+                </div>
+                
+                <div class="flex items-center">
+                    <input id="enhanced-model" name="model-selection" type="radio" class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500"
+                           {% if ai_settings.selected_model == 'enhanced' %}checked{% endif %}
+                           {% if ai_settings.profile.training_status != 'completed' %}disabled{% endif %}>
+                    <label for="enhanced-model" class="ml-3 block text-sm font-medium text-gray-700">
+                        Enhanced Model
+                    </label>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-500 ml-7">
+                        The enhanced model uses a personalized profile based on your email history to provide more accurate importance scoring.
+                        This model must be trained before it can be used.
+                    </p>
+                    
+                    {% if ai_settings.profile.training_status == 'completed' %}
+                    <div class="mt-2 ml-7 p-3 bg-green-50 rounded-md">
+                        <div class="flex">
+                            <div class="flex-shrink-0">
+                                <svg class="h-5 w-5 text-green-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                                </svg>
+                            </div>
+                            <div class="ml-3">
+                                <p class="text-sm font-medium text-green-800">
+                                    Enhanced model trained successfully on {{ ai_settings.profile.last_updated|default('N/A') }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <div class="mt-6">
+                <button id="save-model" type="button" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Save Selection
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="bg-white shadow overflow-hidden sm:rounded-lg">
+        <div class="px-4 py-5 sm:px-6">
+            <h2 class="text-lg font-medium text-gray-900">Train Enhanced Model</h2>
+            <p class="mt-1 max-w-2xl text-sm text-gray-500">
+                Train the AI to understand your email patterns and priorities.
+            </p>
+        </div>
+        <div class="border-t border-gray-200 px-4 py-5 sm:p-6">
+            <p class="text-sm text-gray-500 mb-4">
+                Training the enhanced model will analyze your recent email history to create a personalized profile.
+                This helps the AI better understand which emails are important to you.
+            </p>
+            
+            <div class="mb-4">
+                <h3 class="text-sm font-medium text-gray-700">What to expect:</h3>
+                <ul class="mt-2 text-sm text-gray-500 list-disc pl-5 space-y-1">
+                    <li>Training analyzes approximately 6 months of email history</li>
+                    <li>The process may take several minutes to complete</li>
+                    <li>Your emails are processed securely and the profile is stored only in your account</li>
+                    <li>Only a summary profile is stored, not your actual emails</li>
+                </ul>
+            </div>
+            
+            {% if ai_settings.profile.training_status == 'in_progress' %}
+            <div id="training-progress" class="mb-6">
+                <div class="flex justify-between mb-2">
+                    <span class="text-sm font-medium text-gray-700">Training in progress...</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div class="bg-blue-600 h-2.5 rounded-full animate-pulse w-full"></div>
+                </div>
+                <p class="mt-2 text-sm text-gray-500">
+                    This may take several minutes. You can leave this page and come back later.
+                </p>
+            </div>
+            {% endif %}
+            
+            <div class="mt-4">
+                <button id="train-model" type="button" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        {% if ai_settings.profile.training_status == 'in_progress' %}disabled{% endif %}>
+                    {% if ai_settings.profile.training_status == 'completed' %}
+                        Retrain Model
+                    {% else %}
+                        Train Model
+                    {% endif %}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const saveModelBtn = document.getElementById('save-model');
+        const trainModelBtn = document.getElementById('train-model');
+        const standardModelRadio = document.getElementById('standard-model');
+        const enhancedModelRadio = document.getElementById('enhanced-model');
+        
+        // Save model selection
+        saveModelBtn.addEventListener('click', function() {
+            const selectedModel = standardModelRadio.checked ? 'standard' : 'enhanced';
+            
+            fetch('/update_ai_model', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `model=${selectedModel}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Show success message
+                    alert('AI model preference saved successfully');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Failed to save preference');
+            });
+        });
+        
+        // Train model
+        trainModelBtn.addEventListener('click', function() {
+            if (confirm('Training the enhanced model will analyze your email history. This may take several minutes. Do you want to continue?')) {
+                trainModelBtn.disabled = true;
+                trainModelBtn.textContent = 'Training...';
+                
+                fetch('/train_ai_model', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Show training in progress UI
+                        const trainingDiv = document.createElement('div');
+                        trainingDiv.id = 'training-progress';
+                        trainingDiv.className = 'mb-6';
+                        trainingDiv.innerHTML = `
+                            <div class="flex justify-between mb-2">
+                                <span class="text-sm font-medium text-gray-700">Training in progress...</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                                <div class="bg-blue-600 h-2.5 rounded-full animate-pulse w-full"></div>
+                            </div>
+                            <p class="mt-2 text-sm text-gray-500">
+                                This may take several minutes. You can leave this page and come back later.
+                            </p>
+                        `;
+                        
+                        // Insert before the button
+                        trainModelBtn.parentNode.insertBefore(trainingDiv, trainModelBtn);
+                        
+                        // Start checking status
+                        checkTrainingStatus();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to start training');
+                    trainModelBtn.disabled = false;
+                    trainModelBtn.textContent = 'Train Model';
+                });
+            }
+        });
+        
+        // Check training status
+        function checkTrainingStatus() {
+            fetch('/check_training_status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'completed') {
+                        // Training completed successfully
+                        alert('Training completed successfully! You can now use the enhanced model.');
+                        location.reload();
+                    } else if (data.status === 'failed') {
+                        // Training failed
+                        alert('Training failed. Please try again later.');
+                        location.reload();
+                    } else if (data.status === 'in_progress') {
+                        // Still in progress, check again in 10 seconds
+                        setTimeout(checkTrainingStatus, 10000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    // Check again in 10 seconds even if there was an error
+                    setTimeout(checkTrainingStatus, 10000);
+                });
+        }
+        
+        // If training is in progress when page loads, start checking status
+        {% if ai_settings.profile.training_status == 'in_progress' %}
+        checkTrainingStatus();
+        {% endif %}
+    });
+</script>
+{% endblock %} 

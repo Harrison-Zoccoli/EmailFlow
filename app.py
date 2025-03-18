@@ -13,12 +13,15 @@ import google_auth_oauthlib
 from dotenv import load_dotenv
 import os
 from config import SCOPES, CREDENTIALS_FILE, AZURE_URL
-from datetime import datetime
+from datetime import datetime, timedelta
 from sms_handler import SMSHandler
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import sys
 from googleapiclient.discovery import build
+from firebase_admin import firestore as admin_firestore
+from ai_scorer import AIScorer
+from firebase_config import db as firestore_db
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
@@ -558,106 +561,153 @@ def check_email_thread_status():
             'error': 'Email checking thread is not running'
         })
 
-def initialize_background_email_checker():
-    """Initialize and start the background email checker for all users"""
-    logger.info("=" * 50)
-    logger.info("Initializing background email checker...")
-    logger.info("=" * 50)
-    
+def check_emails_for_user(user_email, user_data, check_number):
+    """Check emails for a specific user"""
     try:
-        # Start the background thread
-        email_checker_thread = threading.Thread(target=check_emails_for_all_users, daemon=True)
-        email_checker_thread.start()
-        logger.info("Background email checker thread started with ID: %s", email_checker_thread.ident)
+        # Create credentials from stored token
+        creds = create_credentials_from_token(user_data.get('gmail_token'))
         
-        return email_checker_thread
-    except Exception as e:
-        logger.error(f"Failed to start background email checker: {str(e)}", exc_info=True)
-        return None
-
-def check_emails_for_all_users():
-    """Background thread that checks emails for all users"""
-    # Wait 10 seconds before starting to ensure server is fully initialized
-    logger.info("Background email checker waiting 10 seconds before starting...")
-    time.sleep(10)
-    
-    logger.info("Background email checker active and running")
-    
-    check_count = 0
-    while True:
-        check_count += 1
+        if not creds or not creds.valid:
+            logger.error(f"Invalid credentials for user {user_email}")
+            return False
+            
+        logger.info(f"Successfully created credentials for user {user_email}")
+        
+        # Create AI scorer
+        ai_scorer = AIScorer(
+            os.getenv('AZURE_OPENAI_KEY'),
+            os.getenv('AZURE_OPENAI_ENDPOINT')
+        )
+        
+        # Create Gmail handler with credentials
         try:
-            # Get all users from the database
-            users = user_manager.get_all_users()
+            # Get the user's selected model from Firebase
+            user_settings = user_manager.get_user(user_email)
+            selected_model = user_settings.get('ai_settings', {}).get('selected_model', 'standard')
             
-            # Filter out invalid users
-            valid_users = []
-            for user in users:
-                # Only consider users with an email, name, phone number, and Gmail token
-                if (user.get('email') and 
-                    user.get('name') and 
-                    user.get('phonenumber') and 
-                    user.get('gmail_token')):
-                    valid_users.append(user)
+            # Get user profile if enhanced model is selected
+            user_profile = None
+            if selected_model == 'enhanced':
+                user_profile = user_settings.get('ai_settings', {}).get('profile', {}).get('profile_text', None)
+                
+            # Log which model is being used - make it more prominent
+            print(f"\n{'=' * 40}")
+            print(f"📧 USING {selected_model.upper()} MODEL FOR {user_email}")
+            if selected_model == 'enhanced' and user_profile:
+                print(f"✅ User profile is available and will be used for scoring")
+            elif selected_model == 'enhanced' and not user_profile:
+                print(f"⚠️ Enhanced model selected but no user profile found")
+            print(f"{'=' * 40}\n")
             
-            logger.info("=" * 30)
-            logger.info(f"Check #{check_count}: Found {len(users)} total users, {len(valid_users)} valid users")
+            logger.info(f"Using {selected_model} model for user {user_email}")
             
-            for user in valid_users:
-                try:
-                    email = user.get('email')
-                    logger.info(f"Processing user: {email}")
-                    
-                    # Create credentials from stored token
-                    creds = create_credentials_from_token(user.get('gmail_token'))
-                    
-                    # If credentials are expired and can't be refreshed, skip this user
-                    if not creds or not creds.valid:
-                        logger.warning(f"Invalid credentials for user {email}, skipping")
-                        continue
-                    
-                    logger.info(f"Successfully created credentials for user {email}")
-                    
-                    # Create a temporary Gmail handler for this user
-                    temp_gmail_handler = GmailHandler()
-                    temp_gmail_handler.creds = creds
-                    temp_gmail_handler.service = build('gmail', 'v1', credentials=creds)
-                    
-                    # Check for new emails
-                    logger.info(f"Checking emails for user {email}")
-                    new_emails_found = temp_gmail_handler.check_for_new_emails()
-                    
-                    if new_emails_found:
-                        logger.info(f"Found new emails for user {email}")
-                    else:
-                        logger.info(f"No new emails found for user {email}")
-                    
-                    # If credentials were refreshed, update the stored token
-                    if creds and creds.valid and hasattr(creds, 'refresh_token') and creds.refresh_token:
-                        token_data = {
-                            'token': creds.token,
-                            'refresh_token': creds.refresh_token,
-                            'token_uri': creds.token_uri,
-                            'client_id': creds.client_id,
-                            'client_secret': creds.client_secret,
-                            'scopes': creds.scopes
-                        }
-                        user_manager.update_user(email, {'gmail_token': token_data})
-                        logger.info(f"Updated token for user {email}")
-                    
-                except Exception as e:
-                    logger.error(f"Error checking emails for user {user.get('email')}: {str(e)}", exc_info=True)
+            # Pass the selected model and user profile to the Gmail handler
+            gmail_handler = GmailHandler(creds, ai_scorer, selected_model=selected_model, user_profile=user_profile)
+        except TypeError:
+            # If it doesn't accept the selected_model parameter, try the old way
+            gmail_handler = GmailHandler()
+            gmail_handler.creds = creds
+            gmail_handler.ai_scorer = ai_scorer
+            gmail_handler.service = build('gmail', 'v1', credentials=creds)
             
-            logger.info(f"Check #{check_count} complete. Sleeping for 10 seconds...")
-            logger.info("=" * 30)
-            # Sleep for 10 seconds before checking again
-            time.sleep(10)
+            # Try to set the selected model if the attribute exists
+            if hasattr(gmail_handler, 'selected_model'):
+                user_settings = user_manager.get_user(user_email)
+                selected_model = user_settings.get('ai_settings', {}).get('selected_model', 'standard')
+                gmail_handler.selected_model = selected_model
+                
+                # Try to set the user profile if the attribute exists
+                if hasattr(gmail_handler, 'user_profile') and selected_model == 'enhanced':
+                    user_profile = user_settings.get('ai_settings', {}).get('profile', {}).get('profile_text', None)
+                    gmail_handler.user_profile = user_profile
+                
+                # Log which model is being used - make it more prominent
+                print(f"\n{'=' * 40}")
+                print(f"📧 USING {selected_model.upper()} MODEL FOR {user_email}")
+                if selected_model == 'enhanced' and user_profile:
+                    print(f"✅ User profile is available and will be used for scoring")
+                elif selected_model == 'enhanced' and not user_profile:
+                    print(f"⚠️ Enhanced model selected but no user profile found")
+                print(f"{'=' * 40}\n")
+                
+                logger.info(f"Using {selected_model} model for user {user_email}")
+        
+        # Only log this once per check cycle instead of for each user
+        if user_email == first_valid_user:
+            logger.info(f"Check #{check_number}: Checking emails...")
+        
+        # Check for new emails
+        new_emails = gmail_handler.check_for_new_emails()
+        
+        # Only log if there are new emails or if this is the first valid user
+        if new_emails or user_email == first_valid_user:
+            logger.info(f"User {user_email}: {'New emails found!' if new_emails else 'No new emails'}")
+        
+        # Update token in database if it was refreshed
+        if creds.token != user_data.get('gmail_token', {}).get('token'):
+            logger.info(f"Updated token for user {user_email}")
+            user_manager.update_gmail_token(user_email, {
+                'token': creds.token,
+                'refresh_token': creds.refresh_token,
+                'token_uri': creds.token_uri,
+                'client_id': creds.client_id,
+                'client_secret': creds.client_secret,
+                'scopes': creds.scopes
+            })
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error checking emails for user {user_email}: {str(e)}")
+        return False
+
+def background_email_checker():
+    """Background thread to check emails for all users"""
+    check_number = 0
+    
+    while True:
+        try:
+            check_number += 1
+            logger.info("==============================")
+            logger.info("Background email checker active and running")
+            
+            # Get all users from database
+            all_users = user_manager.get_all_users()
+            
+            # Check if all_users is a list or dictionary and handle accordingly
+            if isinstance(all_users, list):
+                # If it's a list of user objects
+                valid_users = [user.get('email') for user in all_users 
+                              if user.get('gmail_token') and user.get('gmail_token').get('refresh_token')]
+                
+                # Create a dictionary for easier lookup
+                users_dict = {user.get('email'): user for user in all_users if user.get('email')}
+            else:
+                # If it's already a dictionary with email keys
+                valid_users = [email for email, data in all_users.items() 
+                              if data.get('gmail_token') and data.get('gmail_token').get('refresh_token')]
+                users_dict = all_users
+            
+            # Track the first valid user to use for minimal logging
+            global first_valid_user
+            first_valid_user = valid_users[0] if valid_users else None
+            
+            logger.info(f"Check #{check_number}: Found {len(all_users)} total users, {len(valid_users)} valid users")
+            
+            # Check emails for each valid user
+            for user_email in valid_users:
+                user_data = users_dict.get(user_email, {})
+                check_emails_for_user(user_email, user_data, check_number)
+            
+            logger.info(f"Check #{check_number} complete. Sleeping for 20 seconds...")
+            logger.info("==============================")
+            
+            # Sleep for 20 seconds before checking again (changed from 10)
+            time.sleep(20)
             
         except Exception as e:
-            logger.error(f"Error in background email checker: {str(e)}", exc_info=True)
-            # If there's an error, wait before retrying
-            logger.info("Waiting 30 seconds before retrying after error...")
-            time.sleep(30)
+            logger.error(f"Error in background email checker: {str(e)}")
+            logger.info("Background email checker will retry in 20 seconds...")
+            time.sleep(20)  # Also changed here
 
 def create_credentials_from_token(token_data):
     """Create credentials object from stored token data"""
@@ -683,12 +733,294 @@ def create_credentials_from_token(token_data):
         logger.error(f"Error creating credentials from token: {str(e)}")
         return None
 
+# Global variable to track if the checker is already running
+email_checker_running = False
+
 # Start the background email checker when the app starts
 logger.info("Starting background email checker on server startup")
-email_checker_thread = initialize_background_email_checker()
+# Initialize but don't start the thread yet
+email_checker_thread = threading.Thread(target=background_email_checker)
+email_checker_thread.daemon = True  # Make it a daemon thread
+
+@app.route('/ai_settings', methods=['GET'])
+@login_required
+def ai_settings():
+    user_email = session.get('user_email')
+    user_data = user_manager.get_user(user_email)
+    
+    # Get AI settings or set defaults
+    ai_settings = user_data.get('ai_settings', {
+        'selected_model': 'standard',
+        'profile': {
+            'training_status': 'none'
+        }
+    })
+    
+    return render_template('ai_settings.html', 
+                          current_user=user_email,
+                          ai_settings=ai_settings)
+
+@app.route('/update_ai_model', methods=['POST'])
+@login_required
+def update_ai_model():
+    user_email = session.get('user_email')
+    selected_model = request.form.get('model')
+    
+    # Update user's selected model in Firebase
+    user_manager.update_user(user_email, {
+        'ai_settings.selected_model': selected_model
+    })
+    
+    return jsonify({'status': 'success'})
+
+@app.route('/train_ai_model', methods=['POST'])
+@login_required
+def train_ai_model():
+    user_email = session.get('user_email')
+    
+    # Update training status to in_progress
+    user_manager.update_user(user_email, {
+        'ai_settings.profile.training_status': 'in_progress',
+        'ai_settings.profile.last_updated': admin_firestore.SERVER_TIMESTAMP
+    })
+    
+    # Start training in background thread
+    threading.Thread(target=train_user_model, args=(user_email,)).start()
+    
+    return jsonify({'status': 'success'})
+
+@app.route('/check_training_status', methods=['GET'])
+@login_required
+def check_training_status():
+    user_email = session.get('user_email')
+    user_data = user_manager.get_user(user_email)
+    
+    ai_settings = user_data.get('ai_settings', {})
+    profile = ai_settings.get('profile', {})
+    
+    return jsonify({
+        'status': profile.get('training_status', 'none')
+    })
+
+def train_user_model(user_email):
+    try:
+        logger.info(f"Starting AI model training for user {user_email}")
+        
+        # Get user data and credentials
+        user_data = user_manager.get_user(user_email)
+        creds = create_credentials_from_token(user_data.get('gmail_token'))
+        
+        if not creds or not creds.valid:
+            logger.error(f"Invalid credentials for user {user_email}")
+            user_manager.update_user(user_email, {
+                'ai_settings.profile.training_status': 'failed'
+            })
+            return
+            
+        # Create Gmail service
+        service = build('gmail', 'v1', credentials=creds)
+        
+        # Get most recent emails first (no date filter)
+        logger.info(f"Fetching recent emails for user {user_email}")
+        results = service.users().messages().list(userId='me', maxResults=500).execute()
+        messages = results.get('messages', [])
+        
+        if not messages:
+            logger.warning(f"No emails found for user {user_email}")
+            user_manager.update_user(user_email, {
+                'ai_settings.profile.training_status': 'failed'
+            })
+            return
+            
+        logger.info(f"Found {len(messages)} emails for analysis")
+        
+        # Set a minimum threshold for training
+        if len(messages) < 20:
+            logger.warning(f"Insufficient emails for training: only {len(messages)} found")
+            user_manager.update_user(user_email, {
+                'ai_settings.profile.training_status': 'failed'
+            })
+            return
+        
+        # Process emails in batches
+        batch_size = 50
+        email_data = []
+
+        for i in range(0, min(len(messages), 500), batch_size):  # Cap at 500 emails
+            batch = messages[i:i+batch_size]
+            
+            for msg in batch:
+                try:
+                    # Get full message
+                    message = service.users().messages().get(userId='me', id=msg['id']).execute()
+                    
+                    # Extract headers
+                    headers = message.get('payload', {}).get('headers', [])
+                    subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+                    sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
+                    date = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
+                    
+                    # Get snippet
+                    snippet = message.get('snippet', '')
+                    
+                    # Determine engagement level
+                    labels = message.get('labelIds', [])
+                    has_replied = 'SENT' in labels  # Approximation for replies
+                    is_read = 'UNREAD' not in labels
+                    
+                    engagement = "high" if has_replied else ("medium" if is_read else "low")
+                    
+                    # Add to dataset
+                    email_data.append({
+                        'sender': sender,
+                        'subject': subject,
+                        'date': date,
+                        'snippet': snippet,
+                        'engagement': engagement
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing message {msg['id']}: {str(e)}")
+            
+            # Update progress
+            progress = min(100, int((i + len(batch)) / min(len(messages), 500) * 100))
+            logger.info(f"Processing progress: {progress}%")
+        
+        # Generate user profile using AI
+        profile_text = generate_user_profile(email_data)
+        
+        if not profile_text:
+            logger.error(f"Failed to generate profile for user {user_email}")
+            user_manager.update_user(user_email, {
+                'ai_settings.profile.training_status': 'failed'
+            })
+            return
+            
+        # Update user profile in Firebase
+        user_manager.update_user(user_email, {
+            'ai_settings.profile.profile_text': profile_text,
+            'ai_settings.profile.training_status': 'completed',
+            'ai_settings.profile.last_updated': admin_firestore.SERVER_TIMESTAMP,
+            'ai_settings.selected_model': 'enhanced'  # Auto-switch to enhanced model
+        })
+        
+        logger.info(f"Successfully completed AI model training for user {user_email} with {len(email_data)} emails")
+        
+    except Exception as e:
+        logger.error(f"Error in train_user_model for {user_email}: {str(e)}", exc_info=True)
+        user_manager.update_user(user_email, {
+            'ai_settings.profile.training_status': 'failed'
+        })
+
+def generate_user_profile(email_data):
+    try:
+        # Initialize AI scorer
+        ai_scorer = AIScorer(
+            os.getenv('AZURE_OPENAI_KEY'),
+            os.getenv('AZURE_OPENAI_ENDPOINT')
+        )
+        
+        # Prepare data for the prompt
+        high_engagement_emails = [e for e in email_data if e['engagement'] == 'high']
+        medium_engagement_emails = [e for e in email_data if e['engagement'] == 'medium']
+        
+        # Sample emails for the prompt (prioritize high engagement)
+        sample_size = min(50, len(email_data))
+        samples = (
+            high_engagement_emails[:int(sample_size * 0.6)] + 
+            medium_engagement_emails[:int(sample_size * 0.3)] + 
+            [e for e in email_data if e['engagement'] == 'low'][:int(sample_size * 0.1)]
+        )
+        
+        # Create prompt for profile generation
+        prompt = f"""
+        Based on the following sample of {len(samples)} emails from a total dataset of {len(email_data)} emails, 
+        create a medium-depth profile of the user. Focus on:
+
+        1. Professional/academic status (student, professional, field of study)
+        2. Key relationships and frequent contacts
+        3. Important topics and interests
+        4. Time-sensitive patterns or recurring events
+        5. Types of emails that appear important to this user
+
+        Note that emails marked as "high" engagement were replied to by the user,
+        "medium" engagement emails were read but not replied to,
+        and "low" engagement emails were not read.
+
+        Sample emails:
+        """
+        
+        # Add sample emails to prompt
+        for i, email in enumerate(samples[:50]):  # Limit to 50 samples
+            prompt += f"""
+            Email {i+1}:
+            - Sender: {email['sender']}
+            - Subject: {email['subject']}
+            - Date: {email['date']}
+            - Content: {email['snippet']}
+            - Engagement: {email['engagement']}
+            """
+        
+        prompt += """
+        Based on this information, provide a concise but informative profile of the user
+        that could help determine which new emails would be important to them.
+        Focus on patterns and preferences rather than specific details.
+        """
+        
+        # Call Azure OpenAI
+        response = ai_scorer.client.chat.completions.create(
+            model=ai_scorer.deployment_name,
+            messages=[
+                {"role": "system", "content": "You are an expert at analyzing email patterns and creating user profiles."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=1000
+        )
+        
+        profile_text = response.choices[0].message.content
+        return profile_text
+        
+    except Exception as e:
+        logger.error(f"Error generating user profile: {str(e)}", exc_info=True)
+        return None
+
+@app.route('/reset_training_status', methods=['POST'])
+@login_required
+def reset_training_status():
+    user_email = session.get('user_email')
+    
+    # Reset training status to 'none'
+    user_manager.update_user(user_email, {
+        'ai_settings.profile.training_status': 'none'
+    })
+    
+    return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")
+    
+    # Print clickable links with high visibility
+    print("\n")
+    print("=" * 80)
+    print("=" * 80)
+    print("")
+    print("  🌐  🌐  🌐  EmailFlow SERVER IS RUNNING  🌐  🌐  🌐")
+    print("")
+    print("  👉 CLICK THESE LINKS TO ACCESS THE APPLICATION:")
+    print("")
+    print("     Local:   http://127.0.0.1:5000")
+    print("     Network: http://172.26.65.12:5000")
+    print("")
+    print("=" * 80)
+    print("=" * 80)
+    print("\n")
+    
+    # Start the background thread after printing the links
+    # Only start if not already running
+    if not email_checker_running:
+        email_checker_thread.start()
+        email_checker_running = True
+    
     try:
         socketio.run(app, debug=True, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True)
     finally:

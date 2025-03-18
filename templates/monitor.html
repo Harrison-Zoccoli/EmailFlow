@@ -3,140 +3,68 @@
 {% block title %}EmailFlow - Monitor{% endblock %}
 
 {% block content %}
-<div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-    <!-- Header Section -->
-    <div class="border-b border-gray-200 pb-5 mb-6">
-        <h1 class="text-3xl font-bold text-gray-900">Email Monitor</h1>
-        <p class="mt-2 text-sm text-gray-500">Real-time monitoring of your inbox</p>
-    </div>
-    
-    <!-- Status Indicator -->
-    <div id="status-indicator" class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6 rounded-md flex items-center">
-        <div class="flex-shrink-0">
-            <div class="pulse-dot"></div>
-        </div>
-        <div class="ml-3">
-            <p class="text-sm text-blue-700" id="status-message">
-                Checking for incoming emails...
-            </p>
-        </div>
-    </div>
-    
-    <!-- Email Counter -->
-    <div class="bg-white shadow rounded-lg p-4 mb-6">
-        <div class="flex justify-between items-center">
-            <span class="text-gray-700">New emails received:</span>
-            <span id="email-counter" class="text-lg font-semibold text-blue-600">{{ emails|length }}</span>
-        </div>
-    </div>
-    
-    <!-- Emails Container -->
-    <div id="emails" class="space-y-4">
-        {% if emails %}
-            {% for email in emails %}
-                <div class="bg-white shadow rounded-lg p-6 email-card">
-                    <div class="flex justify-between items-start">
-                        <div>
-                            <p class="text-sm font-medium text-gray-900">{{ email.sender }}</p>
-                            <h3 class="mt-1 text-lg font-semibold text-gray-900">{{ email.subject }}</h3>
-                            <div class="mt-1">
-                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium 
-                                    {% if email.importance.score >= 7 %}
-                                        bg-red-100 text-red-800
-                                    {% elif email.importance.score >= 4 %}
-                                        bg-yellow-100 text-yellow-800
-                                    {% else %}
-                                        bg-green-100 text-green-800
-                                    {% endif %}">
-                                    Priority: {{ email.importance.score }}/10
-                                </span>
-                            </div>
-                        </div>
-                        <span class="text-sm text-gray-500">{{ email.date }}</span>
-                    </div>
-                    <p class="mt-2 text-gray-600">{{ email.snippet }}</p>
-                </div>
-            {% endfor %}
-        {% else %}
-            <div class="text-center py-12">
-                <div class="mx-auto w-24 h-24 text-gray-300">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                    </svg>
-                </div>
-                <h3 class="mt-2 text-lg font-medium text-gray-900">No new emails</h3>
-                <p class="mt-1 text-sm text-gray-500">Waiting for new emails to arrive in your inbox.</p>
+<div class="container mx-auto px-4 py-8 mt-8">
+    <!-- Admin Notice Banner -->
+    <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 rounded shadow-md" role="alert">
+        <div class="flex">
+            <div class="py-1"><svg class="fill-current h-6 w-6 text-yellow-500 mr-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M2.93 17.07A10 10 0 1 1 17.07 2.93 10 10 0 0 1 2.93 17.07zm12.73-1.41A8 8 0 1 0 4.34 4.34a8 8 0 0 0 11.32 11.32zM9 11V9h2v6H9v-4zm0-6h2v2H9V5z"/></svg></div>
+            <div>
+                <p class="font-bold">Admin Area</p>
+                <p class="text-sm">This monitoring page is for administrative purposes and would normally be hidden from public view.</p>
             </div>
-        {% endif %}
+        </div>
+    </div>
+
+    <!-- Service Description -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <h2 class="text-2xl font-semibold text-gray-800 mb-6">Email Monitoring Service</h2>
+        
+        <div class="space-y-6 text-gray-600">
+            <div>
+                <h3 class="text-lg font-medium text-gray-800 mb-2">How It Works</h3>
+                <p>EmailFlow continuously monitors your Gmail inbox for new messages, even when you're not actively using the application. The system uses OAuth 2.0 with refresh tokens to maintain secure access to your Gmail account without requiring you to log in repeatedly.</p>
+            </div>
+            
+            <div>
+                <h3 class="text-lg font-medium text-gray-800 mb-2">Background Processing</h3>
+                <p>Our system runs in the background for all registered users, checking for new emails every 10 seconds. This is accomplished through a dedicated server-side thread that:</p>
+                <ul class="list-disc pl-6 mt-2 space-y-1">
+                    <li>Loads all registered users from the database</li>
+                    <li>Checks each user's Gmail inbox for new messages</li>
+                    <li>Uses Gmail's history API to efficiently detect changes</li>
+                    <li>Processes only new messages to minimize resource usage</li>
+                </ul>
+            </div>
+            
+            <div>
+                <h3 class="text-lg font-medium text-gray-800 mb-2">AI-Powered Analysis</h3>
+                <p>Each email is analyzed by our AI system which scores its importance on a scale of 1-10. The AI considers multiple factors:</p>
+                <ul class="list-disc pl-6 mt-2 space-y-1">
+                    <li>Sender identity and relationship to you</li>
+                    <li>Subject line urgency and content</li>
+                    <li>Message content and context</li>
+                    <li>Time sensitivity of the information</li>
+                    <li>Required actions or responses</li>
+                </ul>
+                <p class="mt-2">Emails with a score of 7 or higher trigger SMS notifications to ensure you never miss critical communications.</p>
+            </div>
+            
+            <div>
+                <h3 class="text-lg font-medium text-gray-800 mb-2">SMS Notifications</h3>
+                <p>When a high-priority email is detected, the system automatically sends an SMS notification to your registered phone number. These notifications include:</p>
+                <ul class="list-disc pl-6 mt-2 space-y-1">
+                    <li>The sender's name or email address</li>
+                    <li>The subject line of the email</li>
+                    <li>The importance score assigned by the AI</li>
+                </ul>
+                <p class="mt-2">This allows you to quickly assess whether immediate attention is required without having to check your email client.</p>
+            </div>
+            
+            <div>
+                <h3 class="text-lg font-medium text-gray-800 mb-2">Current Status</h3>
+                <p>The monitoring service is <span class="text-green-600 font-bold">active</span> and running for all users in the database. The system is designed to be resilient, automatically recovering from temporary failures and maintaining continuous monitoring. There has been little effort put into making this page look "pretty" as its not ment to be seen by users, but for now it can serve to help explain the service.</p>
+            </div>
+        </div>
     </div>
 </div>
-
-<style>
-    .pulse-dot {
-        width: 12px;
-        height: 12px;
-        background-color: #60A5FA;
-        border-radius: 50%;
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0% {
-            transform: scale(0.95);
-            box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.7);
-        }
-        70% {
-            transform: scale(1);
-            box-shadow: 0 0 0 10px rgba(96, 165, 250, 0);
-        }
-        100% {
-            transform: scale(0.95);
-            box-shadow: 0 0 0 0 rgba(96, 165, 250, 0);
-        }
-    }
-    
-    .email-card {
-        transition: all 0.3s ease;
-    }
-    
-    .email-card:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-    }
-</style>
-
-<script>
-    const statusMessage = document.getElementById('status-message');
-    const emailCounter = document.getElementById('email-counter');
-    
-    let lastEmailCount = {{ emails|length }};
-    
-    function refreshPage() {
-        statusMessage.textContent = "Checking for incoming emails...";
-        
-        fetch('/refresh_emails_ajax')
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    if (data.email_count > lastEmailCount) {
-                        // New emails found, reload the page
-                        window.location.reload();
-                    } else {
-                        statusMessage.textContent = "Last checked: " + new Date().toLocaleTimeString();
-                    }
-                } else {
-                    statusMessage.textContent = "Error checking emails";
-                }
-            })
-            .catch(() => {
-                statusMessage.textContent = "Connection error. Will retry...";
-            });
-    }
-    
-    // Update status when page loads
-    statusMessage.textContent = "Last checked: " + new Date().toLocaleTimeString();
-    
-    // Check every 10 seconds
-    setInterval(refreshPage, 10000);
-</script>
 {% endblock %} 
