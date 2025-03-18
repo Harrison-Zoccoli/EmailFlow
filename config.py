@@ -12,7 +12,7 @@ TOKEN_FILE = 'token.json'
 CLIENT_ID = os.getenv('CLIENT_ID')
 AZURE_OPENAI_KEY = os.getenv('AZURE_OPENAI_KEY')
 AZURE_OPENAI_ENDPOINT = os.getenv('AZURE_OPENAI_ENDPOINT')
-AZURE_OPENAI_DEPLOYMENT = "emailflow-openai"  # Keep hardcoded working value
+AZURE_OPENAI_DEPLOYMENT = os.getenv('AZURE_OPENAI_DEPLOYMENT')  # Get from environment variable
 
-# Azure deployment URL (needed for production)
-AZURE_URL = "https://mailflow-webapp-hvb6a9c6hya7akdy.canadacentral-01.azurewebsites.net"
+# For local development with desktop OAuth client
+AZURE_URL = "http://localhost:8090"  # This should match your OAuth client's redirect URI

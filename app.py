@@ -49,27 +49,44 @@ def login():
 
 @app.route('/google_login')
 def google_login():
-    global gmail_handler
+    """Start the Google OAuth flow for desktop client"""
     try:
         logger.info("Starting Google login process")
+        
+        # Create a new GmailHandler instance for this login
+        global gmail_handler
         gmail_handler = GmailHandler()
+        
+        # Run the desktop client flow - explicitly call it here
+        result = gmail_handler.setup_credentials()
+        logger.info(f"Authentication result: {result}")
+        
+        # Get user email after authentication
         user_email = gmail_handler.get_user_email()
-        logger.info(f"User authenticated with email: {user_email}")
+        if not user_email:
+            logger.error("Failed to get user email after authentication")
+            session['error'] = "Failed to get user email"
+            return redirect(url_for('login'))
+            
         session['user_email'] = user_email
+        logger.info(f"User authenticated with email: {user_email}")
         
-        # Check if user exists in Firebase
-        user_data = user_manager.get_user(user_email)
-        logger.info(f"User data from Firebase: {user_data}")
-        
-        if user_data and user_data.get('name') and user_data.get('phonenumber'):
-            logger.info("User has complete profile, redirecting to monitor")
-            return redirect(url_for('monitor'))
+        # Check if user exists in database
+        if result == "new_user" or not user_manager.user_exists(user_email):
+            # New user, redirect to profile completion
+            logger.info(f"New user {user_email}, redirecting to complete_profile")
+            
+            # Create a new user in the database
+            user_manager.create_user(user_email)
+            
+            return redirect(url_for('complete_profile'))
         else:
-            logger.info("User needs to complete profile, redirecting to signup")
-            return redirect(url_for('signup'))
+            # Existing user, redirect to monitor
+            logger.info(f"Existing user {user_email}, redirecting to monitor")
+            return redirect(url_for('monitor'))
             
     except Exception as e:
-        logger.error(f"Error during login: {str(e)}", exc_info=True)
+        logger.error(f"Error in Google login: {str(e)}")
         session['error'] = str(e)
         return redirect(url_for('login'))
 
@@ -251,30 +268,6 @@ def mark_message_as_read(message_id):
     except Exception as e:
         logger.error(f"Error in mark_as_read route: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/oauth2callback')
-def oauth2callback():
-    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
-        CREDENTIALS_FILE,
-        scopes=SCOPES,
-        state=session['state']
-    )
-    flow.redirect_uri = f'{AZURE_URL}/oauth2callback'
-    
-    authorization_response = request.url
-    flow.fetch_token(authorization_response=authorization_response)
-    
-    credentials = flow.credentials
-    session['credentials'] = {
-        'token': credentials.token,
-        'refresh_token': credentials.refresh_token,
-        'token_uri': credentials.token_uri,
-        'client_id': credentials.client_id,
-        'client_secret': credentials.client_secret,
-        'scopes': credentials.scopes
-    }
-    
-    return redirect(url_for('monitor'))
 
 if __name__ == '__main__':
     socketio.run(app, debug=True, port=5000) 

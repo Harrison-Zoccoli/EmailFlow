@@ -1,15 +1,16 @@
 from openai import AzureOpenAI
 import json
+import os
 
 class AIScorer:
-    def __init__(self, api_key, endpoint, deployment_name):
-        print(f"Initializing AIScorer with deployment: {deployment_name}")
+    def __init__(self, api_key, endpoint):
+        print(f"Initializing AIScorer with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT')}")
         self.client = AzureOpenAI(
             api_key=api_key,
             api_version="2024-02-15-preview",
             azure_endpoint=endpoint
         )
-        self.deployment_name = deployment_name
+        self.deployment_name = os.getenv('AZURE_OPENAI_DEPLOYMENT')
 
     def score_email(self, email_data):
         """Score email importance from 1-10"""

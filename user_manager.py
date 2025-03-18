@@ -41,23 +41,26 @@ class UserManager:
             print(f"Error updating user: {str(e)}")
 
     def user_exists(self, email):
-        """Check if a user exists in Firebase"""
-        if not email:
-            logger.error("Empty email provided to user_exists")
-            return False
-        
+        """Check if a user exists in the database with a complete profile"""
         try:
-            # Normalize email
-            email = email.lower().strip()
-            logger.info(f"Checking if user exists: {email}")
+            # Get user data from Firestore
+            doc = self.users_ref.document(email).get()
             
-            # Check if user document exists
-            user_ref = db.collection('users').document(email)
-            user_doc = user_ref.get()
+            if not doc.exists:
+                logger.info(f"User {email} does not exist in database")
+                return False
             
-            exists = user_doc.exists
-            logger.info(f"User exists: {exists}")
-            return exists
+            user_data = doc.to_dict()
+            
+            # Check if user has a complete profile
+            has_complete_profile = (
+                user_data and 
+                user_data.get('name') and 
+                user_data.get('phonenumber')
+            )
+            
+            logger.info(f"User {email} exists with complete profile: {has_complete_profile}")
+            return has_complete_profile
             
         except Exception as e:
             logger.error(f"Error checking if user exists: {str(e)}")

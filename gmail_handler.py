@@ -36,11 +36,9 @@ class GmailHandler:
         # Use environment variables instead of hardcoded keys
         self.ai_scorer = AIScorer(
             os.getenv('AZURE_OPENAI_KEY'),
-            os.getenv('AZURE_OPENAI_ENDPOINT'),
-            "emailflow-openai"  # Keep this hardcoded since it works
+            os.getenv('AZURE_OPENAI_ENDPOINT')
         )
-        print(f"Created AIScorer with deployment: emailflow-openai")
-        self.setup_credentials()
+        print(f"Created AIScorer with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT')}")
 
     def setup_credentials(self):
         """Set up Gmail API credentials"""
@@ -49,39 +47,34 @@ class GmailHandler:
             self.creds = None
             self.service = None
             
-            # Create new flow with forced prompt
+            # Create new flow with forced prompt for desktop client
             flow = InstalledAppFlow.from_client_secrets_file(
                 CREDENTIALS_FILE, 
                 SCOPES,
-                redirect_uri=f'{AZURE_URL}/oauth2callback'
+                redirect_uri='http://localhost:8090'  # Must match OAuth client configuration
             )
             
-            # For local development
-            if 'localhost' in AZURE_URL or '127.0.0.1' in AZURE_URL:
-                # Use local server flow
-                self.creds = flow.run_local_server(
-                    port=8090,
-                    authorization_prompt_message='Please select a Google account',
-                    success_message='Authentication successful! You can close this window.',
-                    open_browser=True
-                )
-                
-                self.service = build('gmail', 'v1', credentials=self.creds)
-                
-                # Check if user exists in database
-                email = self.get_user_email()
-                if not user_manager.user_exists(email):
-                    return "new_user"
-                
-                logger.info("Successfully set up credentials")
-                return None
-            else:
-                # For production, use redirect flow
-                authorization_url, state = flow.authorization_url(
-                    access_type='offline',
-                    include_granted_scopes='true'
-                )
-                return authorization_url
+            # Use local server flow for desktop client
+            self.creds = flow.run_local_server(
+                port=8090,
+                authorization_prompt_message='Please select a Google account',
+                success_message='Authentication successful! You can close this window.',
+                open_browser=True
+            )
+            
+            self.service = build('gmail', 'v1', credentials=self.creds)
+            
+            # Check if user exists in database
+            email = self.get_user_email()
+            logger.info(f"Checking if user {email} exists in database")
+            
+            # Important: Return "new_user" status without re-authenticating
+            if not user_manager.user_exists(email):
+                logger.info(f"User {email} is new, returning new_user status")
+                return "new_user"
+            
+            logger.info(f"User {email} exists, authentication successful")
+            return None
             
         except Exception as e:
             logger.error(f"Error setting up credentials: {str(e)}")
