@@ -15,6 +15,10 @@ import os
 from config import SCOPES, CREDENTIALS_FILE, AZURE_URL
 from datetime import datetime
 from sms_handler import SMSHandler
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+import sys
+from googleapiclient.discovery import build
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
@@ -33,9 +37,21 @@ sms_handler = SMSHandler()  # Initialize with default key for testing
 email_thread = None
 user_manager = UserManager()
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Configure more detailed logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Log to console
+        logging.FileHandler('emailflow.log')  # Also log to file
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Add a startup message
+logger.info("=" * 50)
+logger.info("EmailFlow Server Starting")
+logger.info("=" * 50)
 
 # Add at the start of app.py
 print("Loading environment variables...")
@@ -43,6 +59,13 @@ load_dotenv()
 print(f"AZURE_OPENAI_DEPLOYMENT: {os.getenv('AZURE_OPENAI_DEPLOYMENT')}")
 print(f"AZURE_OPENAI_ENDPOINT: {os.getenv('AZURE_OPENAI_ENDPOINT')}")
 print(f"AZURE_OPENAI_KEY (first 10 chars): {os.getenv('AZURE_OPENAI_KEY')[:10]}...")
+
+def log_exception(exc_type, exc_value, exc_traceback):
+    """Log exception with traceback"""
+    logger.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+# Set the excepthook to catch and log unhandled exceptions
+sys.excepthook = log_exception
 
 def login_required(f):
     @wraps(f)
@@ -100,6 +123,20 @@ def google_login():
         logger.error(f"Error in Google login: {str(e)}")
         session['error'] = str(e)
         return redirect(url_for('login'))
+
+@app.route('/google_login_callback')
+def google_login_callback():
+    global gmail_handler, email_thread
+    
+    # Existing code for handling the OAuth callback...
+    
+    # Start the email checking thread if not already running
+    if email_thread is None or not email_thread.is_alive():
+        email_thread = threading.Thread(target=check_new_emails, daemon=True)
+        email_thread.start()
+        logger.info("Started background email checking thread")
+    
+    # Rest of the existing code...
 
 @app.route('/logout')
 def logout():
@@ -215,27 +252,40 @@ def complete_signup():
         'phonenumber': phone
     })
     
-    # Start email checking thread after profile completion
-    if email_thread is None:
+    # Start email checking thread if not already running
+    if email_thread is None or not email_thread.is_alive():
         email_thread = threading.Thread(target=check_new_emails, daemon=True)
         email_thread.start()
+        logger.info("Started background email checking thread after signup")
     
     return redirect(url_for('monitor'))
 
 def check_new_emails():
+    """Background thread that continuously checks for new emails"""
     while True:
         try:
             if gmail_handler is not None:
                 logger.info("Checking for new emails...")
-                new_messages = gmail_handler.check_new_emails()
-                logger.info(f"Found {len(new_messages)} new messages")
-                for msg in new_messages:
-                    email_storage.add_email(msg)
-                    socketio.emit('new_email', msg)
-            time.sleep(10)
+                
+                # Check for new emails
+                new_emails_found = gmail_handler.check_for_new_emails()
+                
+                if new_emails_found:
+                    logger.info(f"Found new emails during background check")
+                    # The process_message method in gmail_handler will handle 
+                    # sending SMS for high priority emails
+                
+                # Sleep for 30 seconds before checking again
+                time.sleep(30)
+            else:
+                # If gmail_handler is not initialized, wait longer before retrying
+                logger.warning("Gmail handler not initialized, waiting...")
+                time.sleep(60)
+                
         except Exception as e:
-            logger.error(f"Error checking emails: {str(e)}", exc_info=True)
-            time.sleep(10)
+            logger.error(f"Error in background email check: {str(e)}", exc_info=True)
+            # If there's an error, wait before retrying
+            time.sleep(60)
 
 @app.route('/debug')
 @login_required
@@ -493,6 +543,155 @@ def debug_dump_emails():
         logger.error(f"Error in debug_dump_emails: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/check_email_thread_status')
+@login_required
+def check_email_thread_status():
+    """Check if the email thread is running"""
+    if email_thread is not None and email_thread.is_alive():
+        return jsonify({
+            'status': 'running',
+            'last_check': time.time()
+        })
+    else:
+        return jsonify({
+            'status': 'stopped',
+            'error': 'Email checking thread is not running'
+        })
+
+def initialize_background_email_checker():
+    """Initialize and start the background email checker for all users"""
+    logger.info("=" * 50)
+    logger.info("Initializing background email checker...")
+    logger.info("=" * 50)
+    
+    try:
+        # Start the background thread
+        email_checker_thread = threading.Thread(target=check_emails_for_all_users, daemon=True)
+        email_checker_thread.start()
+        logger.info("Background email checker thread started with ID: %s", email_checker_thread.ident)
+        
+        return email_checker_thread
+    except Exception as e:
+        logger.error(f"Failed to start background email checker: {str(e)}", exc_info=True)
+        return None
+
+def check_emails_for_all_users():
+    """Background thread that checks emails for all users"""
+    # Wait 10 seconds before starting to ensure server is fully initialized
+    logger.info("Background email checker waiting 10 seconds before starting...")
+    time.sleep(10)
+    
+    logger.info("Background email checker active and running")
+    
+    check_count = 0
+    while True:
+        check_count += 1
+        try:
+            # Get all users from the database
+            users = user_manager.get_all_users()
+            
+            # Filter out invalid users
+            valid_users = []
+            for user in users:
+                # Only consider users with an email, name, phone number, and Gmail token
+                if (user.get('email') and 
+                    user.get('name') and 
+                    user.get('phonenumber') and 
+                    user.get('gmail_token')):
+                    valid_users.append(user)
+            
+            logger.info("=" * 30)
+            logger.info(f"Check #{check_count}: Found {len(users)} total users, {len(valid_users)} valid users")
+            
+            for user in valid_users:
+                try:
+                    email = user.get('email')
+                    logger.info(f"Processing user: {email}")
+                    
+                    # Create credentials from stored token
+                    creds = create_credentials_from_token(user.get('gmail_token'))
+                    
+                    # If credentials are expired and can't be refreshed, skip this user
+                    if not creds or not creds.valid:
+                        logger.warning(f"Invalid credentials for user {email}, skipping")
+                        continue
+                    
+                    logger.info(f"Successfully created credentials for user {email}")
+                    
+                    # Create a temporary Gmail handler for this user
+                    temp_gmail_handler = GmailHandler()
+                    temp_gmail_handler.creds = creds
+                    temp_gmail_handler.service = build('gmail', 'v1', credentials=creds)
+                    
+                    # Check for new emails
+                    logger.info(f"Checking emails for user {email}")
+                    new_emails_found = temp_gmail_handler.check_for_new_emails()
+                    
+                    if new_emails_found:
+                        logger.info(f"Found new emails for user {email}")
+                    else:
+                        logger.info(f"No new emails found for user {email}")
+                    
+                    # If credentials were refreshed, update the stored token
+                    if creds and creds.valid and hasattr(creds, 'refresh_token') and creds.refresh_token:
+                        token_data = {
+                            'token': creds.token,
+                            'refresh_token': creds.refresh_token,
+                            'token_uri': creds.token_uri,
+                            'client_id': creds.client_id,
+                            'client_secret': creds.client_secret,
+                            'scopes': creds.scopes
+                        }
+                        user_manager.update_user(email, {'gmail_token': token_data})
+                        logger.info(f"Updated token for user {email}")
+                    
+                except Exception as e:
+                    logger.error(f"Error checking emails for user {user.get('email')}: {str(e)}", exc_info=True)
+            
+            logger.info(f"Check #{check_count} complete. Sleeping for 10 seconds...")
+            logger.info("=" * 30)
+            # Sleep for 10 seconds before checking again
+            time.sleep(10)
+            
+        except Exception as e:
+            logger.error(f"Error in background email checker: {str(e)}", exc_info=True)
+            # If there's an error, wait before retrying
+            logger.info("Waiting 30 seconds before retrying after error...")
+            time.sleep(30)
+
+def create_credentials_from_token(token_data):
+    """Create credentials object from stored token data"""
+    try:
+        if not token_data:
+            return None
+            
+        creds = Credentials(
+            token=token_data.get('token'),
+            refresh_token=token_data.get('refresh_token'),
+            token_uri=token_data.get('token_uri'),
+            client_id=token_data.get('client_id'),
+            client_secret=token_data.get('client_secret'),
+            scopes=token_data.get('scopes')
+        )
+        
+        # If token is expired, try to refresh it
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            
+        return creds
+    except Exception as e:
+        logger.error(f"Error creating credentials from token: {str(e)}")
+        return None
+
+# Start the background email checker when the app starts
+logger.info("Starting background email checker on server startup")
+email_checker_thread = initialize_background_email_checker()
+
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")
-    socketio.run(app, debug=True, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True) 
+    try:
+        socketio.run(app, debug=True, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True)
+    finally:
+        # Make sure the thread is properly terminated when the app exits
+        if email_checker_thread and email_checker_thread.is_alive():
+            logger.info("Shutting down background email checker...") 

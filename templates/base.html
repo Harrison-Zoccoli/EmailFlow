@@ -38,6 +38,31 @@
         {% block content %}{% endblock %}
     </main>
 
-    {% block scripts %}{% endblock %}
+    {% block scripts %}
+    {% if session.user_email %}
+    <script>
+        // Check if the email monitoring thread is running every 5 minutes
+        function checkEmailThreadStatus() {
+            fetch('/check_email_thread_status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status !== 'running') {
+                        console.warn('Email monitoring thread is not running');
+                        // You could show a notification to the user here
+                    }
+                })
+                .catch(error => {
+                    console.error('Error checking email thread status:', error);
+                });
+        }
+        
+        // Check status every 5 minutes
+        setInterval(checkEmailThreadStatus, 300000);
+        
+        // Initial check after 1 minute
+        setTimeout(checkEmailThreadStatus, 60000);
+    </script>
+    {% endif %}
+    {% endblock %}
 </body>
 </html> 

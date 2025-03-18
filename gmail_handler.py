@@ -28,9 +28,13 @@ logger = logging.getLogger(__name__)
 user_manager = UserManager()
 
 class GmailHandler:
+    # Class-level dictionary to store history IDs for each user
+    user_history_ids = {}
+    
     def __init__(self):
         self.creds = None
         self.service = None
+        self.ai_scorer = None
         self.last_history_id = None
         
         # Use environment variables instead of hardcoded keys
@@ -54,6 +58,13 @@ class GmailHandler:
                 redirect_uri='http://localhost:8090'  # Must match OAuth client configuration
             )
             
+            # Request offline access to get refresh token
+            flow.oauth2session.redirect_uri = 'http://localhost:8090'
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                prompt='consent'  # Force prompt to ensure we get a refresh token
+            )
+            
             # Use local server flow for desktop client
             self.creds = flow.run_local_server(
                 port=8090,
@@ -62,11 +73,26 @@ class GmailHandler:
                 open_browser=True
             )
             
+            # Store the token data
+            token_data = {
+                'token': self.creds.token,
+                'refresh_token': self.creds.refresh_token,
+                'token_uri': self.creds.token_uri,
+                'client_id': self.creds.client_id,
+                'client_secret': self.creds.client_secret,
+                'scopes': self.creds.scopes
+            }
+            
             self.service = build('gmail', 'v1', credentials=self.creds)
             
             # Check if user exists in database
             email = self.get_user_email()
             logger.info(f"Checking if user {email} exists in database")
+            
+            # Store token in user manager
+            if email:
+                user_manager.update_user(email, {'gmail_token': token_data})
+                logger.info(f"Stored token for user {email}")
             
             # Important: Return "new_user" status without re-authenticating
             if not user_manager.user_exists(email):
@@ -340,61 +366,82 @@ class GmailHandler:
                 service._http.close() 
 
     def check_for_new_emails(self):
-        """Check for new emails since last check"""
+        """Check for new emails using Gmail API history
+        
+        Returns:
+            bool: True if new emails were found, False otherwise
+        """
         try:
             print("\n==== CHECKING FOR NEW EMAILS ====")
             
-            # Create a new service instance
-            service = build('gmail', 'v1', credentials=self.creds)
-            
-            # Get current history ID
-            profile = service.users().getProfile(userId='me').execute()
-            current_history_id = profile.get('historyId')
-            
-            print(f"Current history ID: {current_history_id}")
-            print(f"Last history ID: {self.last_history_id}")
-            
-            # If this is our first check, just store the history ID and return
-            if not self.last_history_id:
-                print("First check - storing history ID for future reference")
-                self.last_history_id = current_history_id
+            # Get the current user's email
+            user_email = self.get_user_email()
+            if not user_email:
+                logger.error("Failed to get user email")
                 return False
             
-            # Get only messages that arrived since last check
-            print(f"Checking for messages since history ID: {self.last_history_id}")
-            history_results = service.users().history().list(
-                userId='me',
-                startHistoryId=self.last_history_id,
+            # Get the current history ID
+            profile = self.service.users().getProfile(userId='me').execute()
+            current_history_id = profile.get('historyId')
+            print(f"Current history ID: {current_history_id}")
+            
+            # Get the last history ID for this user from our in-memory dictionary
+            last_history_id = GmailHandler.user_history_ids.get(user_email)
+            print(f"Last history ID: {last_history_id}")
+            
+            # If this is the first check, just store the history ID and return
+            if not last_history_id:
+                print("First check - storing history ID for future reference")
+                GmailHandler.user_history_ids[user_email] = current_history_id
+                return False
+            
+            # If the history ID hasn't changed, no new emails
+            if current_history_id == last_history_id:
+                print("No changes in history ID - no new emails")
+                return False
+            
+            # Get history since last check
+            history_results = self.service.users().history().list(
+                userId='me', 
+                startHistoryId=last_history_id,
                 historyTypes=['messageAdded']
             ).execute()
             
-            print(f"History results: {json.dumps(history_results, indent=2)}")
+            # Check if there are any new messages
+            history = history_results.get('history', [])
             
-            # Extract only new message IDs
-            message_ids = []
-            if 'history' in history_results:
-                for history in history_results['history']:
-                    for message_added in history.get('messagesAdded', []):
-                        msg = message_added.get('message', {})
-                        # Only include INBOX messages
-                        if 'INBOX' in msg.get('labelIds', []):
-                            message_ids.append(msg['id'])
+            if not history:
+                print("No new messages in history")
+                # Update the history ID even if no new messages
+                GmailHandler.user_history_ids[user_email] = current_history_id
+                return False
             
-            print(f"Found {len(message_ids)} new messages since last check")
-            print(f"Message IDs: {message_ids}")
+            print(f"Found {len(history)} history entries with changes")
             
-            # Process each new message
-            for message_id in message_ids:
-                print(f"Processing message: {message_id}")
-                self.process_message(message_id)
+            # Process each history entry
+            new_messages_found = False
+            for item in history:
+                messages_added = item.get('messagesAdded', [])
+                for message_added in messages_added:
+                    message = message_added.get('message', {})
+                    message_id = message.get('id')
+                    
+                    # Skip if not a new message (e.g., label changes)
+                    if not message_id:
+                        continue
+                    
+                    # Process the new message
+                    print(f"Processing new message: {message_id}")
+                    self.process_message(message_id)
+                    new_messages_found = True
             
-            # Update the last history ID
-            self.last_history_id = current_history_id
+            # Update the history ID after processing
+            GmailHandler.user_history_ids[user_email] = current_history_id
             
-            print("==== FINISHED CHECKING FOR NEW EMAILS ====\n")
-            return len(message_ids) > 0
+            return new_messages_found
             
         except Exception as e:
+            logger.error(f"Error checking for new emails: {str(e)}")
             print(f"Error checking for new emails: {str(e)}")
             return False
 
@@ -472,94 +519,74 @@ class GmailHandler:
         return list(message_ids) 
 
     def process_message(self, message_id):
-        """Process a single message by ID"""
+        """Process a single message by ID
+        
+        Args:
+            message_id (str): Gmail message ID
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         try:
-            print(f"\n==== PROCESSING NEW EMAIL: {message_id} ====")
+            # Get the message details
+            message = self.service.users().messages().get(userId='me', id=message_id).execute()
             
-            # Create a new service instance for this request
-            service = build('gmail', 'v1', credentials=self.creds)
+            # Extract message data
+            headers = message.get('payload', {}).get('headers', [])
             
-            # Get the message
-            message = service.users().messages().get(userId='me', id=message_id).execute()
+            # Get subject and sender
+            subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+            sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
             
-            # Extract message details
-            headers = {header['name']: header['value'] for header in message['payload']['headers']}
-            
-            # Get sender, subject, and date
-            sender = headers.get('From', 'Unknown Sender')
-            subject = headers.get('Subject', '(No Subject)')
-            date = headers.get('Date', 'Unknown Date')
-            
-            # Get snippet (preview of message body)
+            # Get snippet
             snippet = message.get('snippet', '')
             
-            print(f"Email details:")
-            print(f"  From: {sender}")
-            print(f"  Subject: {subject}")
-            print(f"  Date: {date}")
-            print(f"  Snippet: {snippet[:100]}...")
-            
             # Score the email importance
-            print(f"Scoring email with AI...")
             importance = self.ai_scorer.score_email({
                 'sender': sender,
                 'subject': subject,
                 'snippet': snippet
             })
-            print(f"AI Score: {importance['score']}/10")
-            print(f"Explanation: {importance['explanation']}")
             
-            # Create email object
-            email_data = {
-                'id': message_id,
-                'sender': sender,
-                'subject': subject,
-                'date': date,
-                'snippet': snippet,
-                'importance': importance
-            }
+            print(f"Email from {sender}")
+            print(f"Subject: {subject}")
+            print(f"Importance score: {importance['score']}/10 - {importance['explanation']}")
             
-            # Import the global email_storage directly from app.py
-            import app
-            app.email_storage.add_email(email_data)
-            print(f"Email added to storage. Total emails: {len(app.email_storage.get_all_emails())}")
-            
-            # Check if this is a high-priority email (score >= 5)
-            if importance['score'] >= 5:
-                print(f"HIGH PRIORITY EMAIL DETECTED! Score: {importance['score']}/10")
-                logger.info(f"HIGH PRIORITY EMAIL DETECTED! ID: {message_id}, Score: {importance['score']}/10")
+            # If importance score is high (7 or above), send SMS notification
+            if importance['score'] >= 7:
+                print(f"High importance email detected! Score: {importance['score']}/10")
                 
-                # Get user's phone number from session
-                user_email = app.session.get('user_email')
-                if user_email:
-                    logger.info(f"Getting user data for {user_email}")
-                    user_data = app.user_manager.get_user(user_email)
+                # Get the current user's email
+                user_email = self.get_user_email()
+                
+                # Get user's phone number from database
+                user_data = user_manager.get_user(user_email)
+                if user_data and user_data.get('phonenumber'):
                     phone_number = user_data.get('phonenumber')
+                    logger.info(f"Found phone number for user {user_email}: {phone_number}")
                     
-                    if phone_number:
-                        logger.info(f"Found phone number for user {user_email}: {phone_number}")
-                        
-                        # Send SMS notification using the SMS handler
-                        logger.info(f"Attempting to send SMS notification to {phone_number}")
-                        result = app.sms_handler.send_high_priority_email_alert(
-                            phone_number, 
-                            sender, 
-                            subject, 
-                            importance['score']
-                        )
-                        
-                        if result:
-                            print(f"SMS notification sent to {phone_number}")
-                            logger.info(f"SMS notification successfully sent to {phone_number}")
-                        else:
-                            print(f"Failed to send SMS notification to {phone_number}")
-                            logger.error(f"Failed to send SMS notification to {phone_number}")
+                    # Import here to avoid circular imports
+                    from sms_handler import SMSHandler
+                    sms_handler = SMSHandler()
+                    
+                    # Send SMS notification using the SMS handler
+                    logger.info(f"Attempting to send SMS notification to {phone_number}")
+                    result = sms_handler.send_high_priority_email_alert(
+                        phone_number, 
+                        sender, 
+                        subject, 
+                        importance['score']
+                    )
+                    
+                    if result:
+                        print(f"SMS notification sent to {phone_number}")
+                        logger.info(f"SMS notification successfully sent to {phone_number}")
                     else:
-                        print("No phone number found for user")
-                        logger.warning(f"No phone number found for user {user_email}")
+                        print(f"Failed to send SMS notification to {phone_number}")
+                        logger.error(f"Failed to send SMS notification to {phone_number}")
                 else:
-                    print("No user email in session")
-                    logger.warning("No user email in session, cannot send SMS notification")
+                    print("No phone number found for user")
+                    logger.warning(f"No phone number found for user {user_email}")
             
             print(f"==== EMAIL PROCESSING COMPLETE ====\n")
             return True
@@ -567,8 +594,4 @@ class GmailHandler:
         except Exception as e:
             logger.error(f"Error processing message {message_id}: {str(e)}")
             print(f"ERROR processing message {message_id}: {str(e)}")
-            return False
-        finally:
-            # Ensure we clean up any remaining connections
-            if 'service' in locals() and hasattr(service, '_http'):
-                service._http.close() 
+            return False 

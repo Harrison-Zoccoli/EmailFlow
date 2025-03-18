@@ -65,3 +65,16 @@ class UserManager:
         except Exception as e:
             logger.error(f"Error checking if user exists: {str(e)}")
             return False 
+
+    def get_all_users(self):
+        """Get all users from the database"""
+        try:
+            users = []
+            docs = self.users_ref.stream()
+            for doc in docs:
+                user_data = doc.to_dict()
+                users.append(user_data)
+            return users
+        except Exception as e:
+            logger.error(f"Error getting all users: {str(e)}")
+            return [] 
