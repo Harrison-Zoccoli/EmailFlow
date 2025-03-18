@@ -8,12 +8,17 @@ import base64
 from email.mime.text import MIMEText
 import json
 import time
-from config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE, AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT
+from config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE
 from ai_scorer import AIScorer
 import logging
 from datetime import datetime, timedelta
 from flask import session
 from user_manager import UserManager
+import google_auth_oauthlib.flow
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,11 +32,18 @@ class GmailHandler:
         self.creds = None
         self.service = None
         self.last_history_id = None
-        self.ai_scorer = AIScorer(AZURE_OPENAI_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_DEPLOYMENT)
+        
+        # Hardcode values directly (for testing)
+        self.ai_scorer = AIScorer(
+            "DoOzggQ4kLh4CmF8P5YFqEbCefnfYy9Qe1lBAw4jOcD3AyJjK8rLJQQJ99BCACYeBjFXJ3w3AAABACOGCYKL",
+            "https://mailflow-openai.openai.azure.com/",
+            "emailflow-openai"  # Use exact name from test
+        )
+        print(f"Created AIScorer with deployment: emailflow-openai")
         self.setup_credentials()
 
     def setup_credentials(self):
-        """Set up Gmail API credentials with forced new authentication"""
+        """Set up Gmail API credentials"""
         try:
             # Clear any existing credentials
             self.creds = None
@@ -59,11 +71,18 @@ class GmailHandler:
             )
             
             self.service = build('gmail', 'v1', credentials=self.creds)
-            logger.info("Successfully set up new credentials")
+            
+            # Check if user exists in database
+            email = self.get_user_email()
+            if not user_manager.user_exists(email):
+                return "new_user"
+            
+            logger.info("Successfully set up credentials")
+            return None
             
         except Exception as e:
-            logger.error(f"Error setting up credentials: {str(e)}", exc_info=True)
-            raise
+            logger.error(f"Error setting up credentials: {str(e)}")
+            return str(e)
 
     def setup_push_notifications(self):
         """Set up Gmail API push notifications"""
@@ -164,13 +183,15 @@ class GmailHandler:
         return new_messages
 
     def get_user_email(self):
-        """Get the email of the authenticated user"""
+        """Get user's email address"""
         try:
             profile = self.service.users().getProfile(userId='me').execute()
-            return profile['emailAddress']
+            email = profile['emailAddress']
+            logger.info(f"Retrieved email: {email}")
+            return email
         except Exception as e:
-            print(f"Error getting user email: {str(e)}")
-            return None 
+            logger.error(f"Error getting user email: {str(e)}")
+            return None
 
     def get_filtered_unread_emails(self, timeframe):
         """Get unread emails within timeframe and process them one by one"""

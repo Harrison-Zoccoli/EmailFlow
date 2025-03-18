@@ -9,6 +9,8 @@ from flask_socketio import SocketIO, emit
 from functools import wraps
 import logging
 import requests
+from dotenv import load_dotenv
+import os
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
@@ -21,6 +23,13 @@ user_manager = UserManager()
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Add at the start of app.py
+print("Loading environment variables...")
+load_dotenv()
+print(f"AZURE_OPENAI_DEPLOYMENT: {os.getenv('AZURE_OPENAI_DEPLOYMENT')}")
+print(f"AZURE_OPENAI_ENDPOINT: {os.getenv('AZURE_OPENAI_ENDPOINT')}")
+print(f"AZURE_OPENAI_KEY (first 10 chars): {os.getenv('AZURE_OPENAI_KEY')[:10]}...")
 
 def login_required(f):
     @wraps(f)

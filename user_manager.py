@@ -1,5 +1,8 @@
 from firebase_admin import firestore
 from firebase_config import db
+import logging
+
+logger = logging.getLogger(__name__)
 
 class UserManager:
     def __init__(self):
@@ -35,4 +38,27 @@ class UserManager:
             else:
                 user_ref.update(data)
         except Exception as e:
-            print(f"Error updating user: {str(e)}") 
+            print(f"Error updating user: {str(e)}")
+
+    def user_exists(self, email):
+        """Check if a user exists in Firebase"""
+        if not email:
+            logger.error("Empty email provided to user_exists")
+            return False
+        
+        try:
+            # Normalize email
+            email = email.lower().strip()
+            logger.info(f"Checking if user exists: {email}")
+            
+            # Check if user document exists
+            user_ref = db.collection('users').document(email)
+            user_doc = user_ref.get()
+            
+            exists = user_doc.exists
+            logger.info(f"User exists: {exists}")
+            return exists
+            
+        except Exception as e:
+            logger.error(f"Error checking if user exists: {str(e)}")
+            return False 

@@ -3,6 +3,7 @@ import json
 
 class AIScorer:
     def __init__(self, api_key, endpoint, deployment_name):
+        print(f"Initializing AIScorer with deployment: {deployment_name}")
         self.client = AzureOpenAI(
             api_key=api_key,
             api_version="2024-02-15-preview",
@@ -12,6 +13,8 @@ class AIScorer:
 
     def score_email(self, email_data):
         """Score email importance from 1-10"""
+        print(f"⚠️ Using deployment: {self.deployment_name}")
+        
         prompt = f"""
         Score this email's importance from 1-10 (10 being most important).
         Consider:
@@ -29,16 +32,18 @@ class AIScorer:
         {{"score": 7, "explanation": "Urgent work matter requiring immediate attention"}}
         """
 
-        response = self.client.chat.completions.create(
-            model=self.deployment_name,
-            messages=[
-                {"role": "system", "content": "You are an email importance analyzer. Score emails from 1-10."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-
         try:
+            response = self.client.chat.completions.create(
+                model=self.deployment_name,
+                messages=[
+                    {"role": "system", "content": "You are an email importance analyzer. Score emails from 1-10."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            print(f"✅ API call successful with deployment: {self.deployment_name}")
             result = json.loads(response.choices[0].message.content)
             return result
-        except:
+        except Exception as e:
+            print(f"❌ API call failed with deployment: {self.deployment_name}")
+            print(f"Error: {str(e)}")
             return {"score": 5, "explanation": "Error processing score"} 
