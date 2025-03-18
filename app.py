@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import os
 from config import SCOPES, CREDENTIALS_FILE, AZURE_URL
 from datetime import datetime
+from sms_handler import SMSHandler
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
@@ -25,9 +26,11 @@ socketio = SocketIO(app,
                    logger=True,               # Enable SocketIO logging
                    engineio_logger=True)      # Enable Engine.IO logging
 
+# Initialize handlers
 email_storage = EmailStorage()
 gmail_handler = None
-email_thread = None  # Add this to track the thread
+sms_handler = SMSHandler()  # Initialize with default key for testing
+email_thread = None
 user_manager = UserManager()
 
 # Set up logging

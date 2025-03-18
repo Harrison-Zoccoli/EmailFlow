@@ -524,6 +524,43 @@ class GmailHandler:
             app.email_storage.add_email(email_data)
             print(f"Email added to storage. Total emails: {len(app.email_storage.get_all_emails())}")
             
+            # Check if this is a high-priority email (score >= 5)
+            if importance['score'] >= 5:
+                print(f"HIGH PRIORITY EMAIL DETECTED! Score: {importance['score']}/10")
+                logger.info(f"HIGH PRIORITY EMAIL DETECTED! ID: {message_id}, Score: {importance['score']}/10")
+                
+                # Get user's phone number from session
+                user_email = app.session.get('user_email')
+                if user_email:
+                    logger.info(f"Getting user data for {user_email}")
+                    user_data = app.user_manager.get_user(user_email)
+                    phone_number = user_data.get('phonenumber')
+                    
+                    if phone_number:
+                        logger.info(f"Found phone number for user {user_email}: {phone_number}")
+                        
+                        # Send SMS notification using the SMS handler
+                        logger.info(f"Attempting to send SMS notification to {phone_number}")
+                        result = app.sms_handler.send_high_priority_email_alert(
+                            phone_number, 
+                            sender, 
+                            subject, 
+                            importance['score']
+                        )
+                        
+                        if result:
+                            print(f"SMS notification sent to {phone_number}")
+                            logger.info(f"SMS notification successfully sent to {phone_number}")
+                        else:
+                            print(f"Failed to send SMS notification to {phone_number}")
+                            logger.error(f"Failed to send SMS notification to {phone_number}")
+                    else:
+                        print("No phone number found for user")
+                        logger.warning(f"No phone number found for user {user_email}")
+                else:
+                    print("No user email in session")
+                    logger.warning("No user email in session, cannot send SMS notification")
+            
             print(f"==== EMAIL PROCESSING COMPLETE ====\n")
             return True
             
