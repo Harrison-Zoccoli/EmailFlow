@@ -14,3 +14,7 @@ class EmailStorage:
     def clear_emails(self):
         """Clear all stored emails"""
         self.emails = []
+
+    def get_emails(self):
+        """Alias for get_all_emails for backward compatibility"""
+        return self.get_all_emails()

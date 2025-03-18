@@ -134,4 +134,52 @@ nav .nav-text {
 .spline-container canvas {
     width: 100% !important;
     height: 100% !important;
+}
+
+/* Skills Section */
+.skills-section {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.9));
+    position: relative;
+    z-index: 1;
+}
+
+.skill-card {
+    background-color: rgba(45, 54, 87, 0.3);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(155, 165, 201, 0.2);
+    border-radius: 12px;
+    padding: 24px;
+    transition: all 0.3s ease;
+}
+
+.skill-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    border-color: rgba(155, 165, 201, 0.4);
+}
+
+.skill-category {
+    font-size: 20px;
+    font-weight: 600;
+    color: white;
+    margin-bottom: 16px;
+    border-bottom: 1px solid rgba(155, 165, 201, 0.3);
+    padding-bottom: 8px;
+}
+
+.skill-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.skill-list li {
+    margin-bottom: 12px;
+    color: rgba(255, 255, 255, 0.8);
+    line-height: 1.5;
+}
+
+.skill-name {
+    color: #9BA5C9;
+    font-weight: 600;
 } 

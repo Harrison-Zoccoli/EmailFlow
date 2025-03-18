@@ -13,10 +13,18 @@ import google_auth_oauthlib
 from dotenv import load_dotenv
 import os
 from config import SCOPES, CREDENTIALS_FILE, AZURE_URL
+from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
-socketio = SocketIO(app)
+
+# Initialize with explicit configuration for WebSocket
+socketio = SocketIO(app, 
+                   cors_allowed_origins="*",  # Allow connections from any origin
+                   async_mode='threading',    # Use threading mode
+                   logger=True,               # Enable SocketIO logging
+                   engineio_logger=True)      # Enable Engine.IO logging
+
 email_storage = EmailStorage()
 gmail_handler = None
 email_thread = None  # Add this to track the thread
@@ -136,12 +144,39 @@ def home():
 @app.route('/monitor')
 @login_required
 def monitor():
-    return render_template('monitor.html')
+    """Monitor page - show all emails"""
+    try:
+        # Get all emails from storage
+        emails = email_storage.get_all_emails()
+        
+        print("\n==== MONITOR PAGE LOAD ====")
+        print(f"Total emails in storage: {len(emails)}")
+        print(f"Email storage object ID: {id(email_storage)}")
+        
+        # Print each email
+        for i, email in enumerate(emails):
+            print(f"  {i+1}. ID: {email.get('id', 'No ID')}")
+            print(f"     Subject: {email.get('subject', 'No subject')}")
+            print(f"     From: {email.get('sender', 'Unknown')}")
+        
+        return render_template('monitor.html', emails=emails)
+    except Exception as e:
+        logger.error(f"Error in monitor route: {str(e)}")
+        return render_template('monitor.html', emails=[])
 
 @app.route('/emails')
 @login_required
 def get_emails():
-    return jsonify(email_storage.get_all_emails())
+    """Get all stored emails"""
+    try:
+        emails = email_storage.get_all_emails()
+        print(f"Returning {len(emails)} emails from storage")
+        for i, email in enumerate(emails):
+            print(f"  {i+1}. {email.get('subject', 'No subject')} from {email.get('sender', 'Unknown')}")
+        return jsonify(emails)
+    except Exception as e:
+        logger.error(f"Error in get_emails: {str(e)}")
+        return jsonify([])
 
 @app.route('/update_user', methods=['POST'])
 @login_required
@@ -213,7 +248,34 @@ def debug():
 @app.route('/unread')
 @login_required
 def unread():
+    """Unread emails page"""
     return render_template('unread.html')
+
+@app.route('/get_unread_emails')
+@login_required
+def get_unread_emails_ajax():
+    """Get unread emails from Gmail API directly"""
+    try:
+        time_filter = request.args.get('time_filter', 'week')
+        
+        if gmail_handler:
+            # This calls Gmail API directly to get unread emails
+            unread_emails = gmail_handler.get_unread_emails(time_filter)
+            return jsonify({
+                'status': 'success',
+                'emails': unread_emails
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'error': 'Gmail handler not initialized'
+            })
+    except Exception as e:
+        logger.error(f"Error getting unread emails: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        })
 
 @app.route('/unread_emails/<filter>')
 @login_required
@@ -269,5 +331,165 @@ def mark_message_as_read(message_id):
         logger.error(f"Error in mark_as_read route: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/check_emails')
+@login_required
+def check_emails():
+    """Manually check for new emails"""
+    try:
+        if gmail_handler:
+            # Get the latest emails
+            gmail_handler.check_for_new_emails()
+            return jsonify({'status': 'success'})
+        else:
+            return jsonify({'status': 'error', 'error': 'Gmail handler not initialized'})
+    except Exception as e:
+        logger.error(f"Error checking emails: {str(e)}")
+        return jsonify({'status': 'error', 'error': str(e)})
+
+@app.route('/debug_emails')
+@login_required
+def debug_emails():
+    """Debug endpoint to check what emails are in storage"""
+    try:
+        emails = email_storage.get_emails()
+        return jsonify({
+            'count': len(emails),
+            'emails': emails
+        })
+    except Exception as e:
+        logger.error(f"Error in debug_emails: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/debug_process_email/<message_id>')
+@login_required
+def debug_process_email(message_id):
+    """Debug endpoint to manually process a specific email"""
+    try:
+        if gmail_handler:
+            result = gmail_handler.process_message(message_id)
+            return jsonify({
+                'status': 'success' if result else 'error',
+                'message': f"Processed email {message_id}",
+                'emails_in_storage': len(email_storage.get_all_emails())
+            })
+        else:
+            return jsonify({'status': 'error', 'error': 'Gmail handler not initialized'})
+    except Exception as e:
+        logger.error(f"Error in debug_process_email: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/add_test_email_and_redirect')
+@login_required
+def add_test_email_and_redirect():
+    """Add a test email to the storage and redirect to monitor page"""
+    try:
+        # Create a test email
+        test_email = {
+            'id': f'test-{int(time.time())}',
+            'sender': 'test@example.com',
+            'subject': f'Test Email {int(time.time())}',
+            'date': time.strftime('%a, %d %b %Y %H:%M:%S +0000', time.gmtime()),
+            'snippet': 'This is a test email to verify the UI display functionality.',
+            'importance': {
+                'score': 5,
+                'explanation': 'This is a test email with medium priority.'
+            },
+            'stored_at': datetime.now().isoformat()
+        }
+        
+        # Add to storage
+        email_storage.add_email(test_email)
+        
+        # Print to console
+        print(f"\n==== ADDED TEST EMAIL ====")
+        print(f"Email details:")
+        print(f"  From: {test_email['sender']}")
+        print(f"  Subject: {test_email['subject']}")
+        print(f"  Date: {test_email['date']}")
+        print(f"  Snippet: {test_email['snippet']}")
+        print(f"  Priority: {test_email['importance']['score']}/10")
+        print(f"Total emails in storage: {len(email_storage.get_all_emails())}")
+        
+        # Redirect to monitor page
+        return redirect(url_for('monitor'))
+    except Exception as e:
+        logger.error(f"Error adding test email: {str(e)}")
+        return redirect(url_for('monitor'))
+
+@app.route('/refresh_emails')
+@login_required
+def refresh_emails():
+    """Check for new emails and redirect to monitor page"""
+    try:
+        if gmail_handler:
+            # Get the latest emails
+            gmail_handler.check_for_new_emails()
+            
+            # Print current emails in storage
+            emails = email_storage.get_all_emails()
+            print(f"After refresh: {len(emails)} emails in storage")
+            
+        return redirect(url_for('monitor'))
+    except Exception as e:
+        logger.error(f"Error refreshing emails: {str(e)}")
+        return redirect(url_for('monitor'))
+
+@app.route('/refresh_emails_ajax')
+@login_required
+def refresh_emails_ajax():
+    """Check for new emails and return JSON response"""
+    try:
+        # Get current email count
+        current_count = len(email_storage.get_all_emails())
+        
+        # Check for new emails if Gmail handler is initialized
+        if gmail_handler:
+            new_emails_found = gmail_handler.check_for_new_emails()
+            
+            # Get updated count
+            new_count = len(email_storage.get_all_emails())
+            
+            return jsonify({
+                'status': 'success',
+                'email_count': new_count,
+                'new_emails': new_count - current_count,
+                'found_new': new_emails_found
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'error': 'Gmail handler not initialized',
+                'email_count': current_count
+            })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'email_count': len(email_storage.get_all_emails())
+        })
+
+@app.route('/debug_dump_emails')
+@login_required
+def debug_dump_emails():
+    """Debug endpoint to dump all email storage contents"""
+    try:
+        emails = email_storage.get_all_emails()
+        
+        # Print to console
+        print("\n==== DEBUG DUMP EMAILS ====")
+        print(f"Total emails in storage: {len(emails)}")
+        print(f"Email storage object ID: {id(email_storage)}")
+        
+        # Return as JSON
+        return jsonify({
+            'count': len(emails),
+            'storage_id': id(email_storage),
+            'emails': emails
+        })
+    except Exception as e:
+        logger.error(f"Error in debug_dump_emails: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
-    socketio.run(app, debug=True, port=5000) 
+    print("Starting Flask-SocketIO server...")
+    socketio.run(app, debug=True, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True) 

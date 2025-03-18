@@ -4,62 +4,139 @@
 
 {% block content %}
 <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
-    <h1 class="text-3xl font-bold text-gray-900">Email Monitor</h1>
-    <div class="mt-6">
-        <div id="emails" class="space-y-4"></div>
+    <!-- Header Section -->
+    <div class="border-b border-gray-200 pb-5 mb-6">
+        <h1 class="text-3xl font-bold text-gray-900">Email Monitor</h1>
+        <p class="mt-2 text-sm text-gray-500">Real-time monitoring of your inbox</p>
+    </div>
+    
+    <!-- Status Indicator -->
+    <div id="status-indicator" class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6 rounded-md flex items-center">
+        <div class="flex-shrink-0">
+            <div class="pulse-dot"></div>
+        </div>
+        <div class="ml-3">
+            <p class="text-sm text-blue-700" id="status-message">
+                Checking for incoming emails...
+            </p>
+        </div>
+    </div>
+    
+    <!-- Email Counter -->
+    <div class="bg-white shadow rounded-lg p-4 mb-6">
+        <div class="flex justify-between items-center">
+            <span class="text-gray-700">New emails received:</span>
+            <span id="email-counter" class="text-lg font-semibold text-blue-600">{{ emails|length }}</span>
+        </div>
+    </div>
+    
+    <!-- Emails Container -->
+    <div id="emails" class="space-y-4">
+        {% if emails %}
+            {% for email in emails %}
+                <div class="bg-white shadow rounded-lg p-6 email-card">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-sm font-medium text-gray-900">{{ email.sender }}</p>
+                            <h3 class="mt-1 text-lg font-semibold text-gray-900">{{ email.subject }}</h3>
+                            <div class="mt-1">
+                                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium 
+                                    {% if email.importance.score >= 7 %}
+                                        bg-red-100 text-red-800
+                                    {% elif email.importance.score >= 4 %}
+                                        bg-yellow-100 text-yellow-800
+                                    {% else %}
+                                        bg-green-100 text-green-800
+                                    {% endif %}">
+                                    Priority: {{ email.importance.score }}/10
+                                </span>
+                            </div>
+                        </div>
+                        <span class="text-sm text-gray-500">{{ email.date }}</span>
+                    </div>
+                    <p class="mt-2 text-gray-600">{{ email.snippet }}</p>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="text-center py-12">
+                <div class="mx-auto w-24 h-24 text-gray-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                </div>
+                <h3 class="mt-2 text-lg font-medium text-gray-900">No new emails</h3>
+                <p class="mt-1 text-sm text-gray-500">Waiting for new emails to arrive in your inbox.</p>
+            </div>
+        {% endif %}
     </div>
 </div>
 
-<script>
-    const socket = io();
-    const emailsDiv = document.getElementById('emails');
-
-    // Display existing emails on load
-    fetch('/emails')
-        .then(response => response.json())
-        .then(emails => {
-            console.log('Loaded existing emails:', emails);
-            emails.forEach(email => addEmailToDisplay(email));
-        })
-        .catch(error => console.error('Error loading emails:', error));
-
-    // Listen for new emails
-    socket.on('new_email', function(email) {
-        console.log('Received new email:', email);
-        addEmailToDisplay(email);
-    });
-
-    socket.on('connect', () => {
-        console.log('Connected to WebSocket');
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Disconnected from WebSocket');
-    });
-
-    function addEmailToDisplay(email) {
-        const emailElement = document.createElement('div');
-        emailElement.className = 'bg-white shadow rounded-lg p-6';
-        emailElement.innerHTML = `
-            <div class="flex justify-between items-start">
-                <div>
-                    <p class="text-sm font-medium text-gray-900">${email.sender}</p>
-                    <h3 class="mt-1 text-lg font-semibold text-gray-900">${email.subject}</h3>
-                    <div class="mt-1">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium 
-                            ${email.importance.score >= 7 ? 'bg-red-100 text-red-800' : 
-                              email.importance.score >= 4 ? 'bg-yellow-100 text-yellow-800' : 
-                              'bg-green-100 text-green-800'}">
-                            Priority: ${email.importance.score}/10
-                        </span>
-                        <p class="text-sm text-gray-500 mt-1">${email.importance.explanation}</p>
-                    </div>
-                </div>
-                <span class="text-sm text-gray-500">${email.date}</span>
-            </div>
-            <p class="mt-2 text-gray-600">${email.snippet}</p>
-        `;
-        emailsDiv.insertBefore(emailElement, emailsDiv.firstChild);
+<style>
+    .pulse-dot {
+        width: 12px;
+        height: 12px;
+        background-color: #60A5FA;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
     }
+    
+    @keyframes pulse {
+        0% {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.7);
+        }
+        70% {
+            transform: scale(1);
+            box-shadow: 0 0 0 10px rgba(96, 165, 250, 0);
+        }
+        100% {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(96, 165, 250, 0);
+        }
+    }
+    
+    .email-card {
+        transition: all 0.3s ease;
+    }
+    
+    .email-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    }
+</style>
+
+<script>
+    const statusMessage = document.getElementById('status-message');
+    const emailCounter = document.getElementById('email-counter');
+    
+    let lastEmailCount = {{ emails|length }};
+    
+    function refreshPage() {
+        statusMessage.textContent = "Checking for incoming emails...";
+        
+        fetch('/refresh_emails_ajax')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    if (data.email_count > lastEmailCount) {
+                        // New emails found, reload the page
+                        window.location.reload();
+                    } else {
+                        statusMessage.textContent = "Last checked: " + new Date().toLocaleTimeString();
+                    }
+                } else {
+                    statusMessage.textContent = "Error checking emails";
+                }
+            })
+            .catch(() => {
+                statusMessage.textContent = "Connection error. Will retry...";
+            });
+    }
+    
+    // Update status when page loads
+    statusMessage.textContent = "Last checked: " + new Date().toLocaleTimeString();
+    
+    // Check every 10 seconds
+    setInterval(refreshPage, 10000);
 </script>
 {% endblock %} 
