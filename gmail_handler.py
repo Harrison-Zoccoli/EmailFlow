@@ -161,68 +161,31 @@ class GmailHandler:
                 else:
                     return None
 
-    def get_unread_emails(self, time_filter='week'):
-        """Get unread emails from Gmail API directly"""
+    def get_unread_emails(self, after=None):
+        """Get unread emails, optionally filtered by date"""
         try:
-            # Create a new service instance for this request
-            service = build('gmail', 'v1', credentials=self.creds)
+            if not self.service:
+                self.setup_service()
             
-            # Calculate the time range based on the filter
-            now = datetime.now()
-            if time_filter == 'hour':
-                time_ago = now - timedelta(hours=1)
-            elif time_filter == 'day':
-                time_ago = now - timedelta(days=1)
-            elif time_filter == 'week':
-                time_ago = now - timedelta(weeks=1)
-            elif time_filter == 'month':
-                time_ago = now - timedelta(days=30)
-            else:
-                time_ago = now - timedelta(weeks=1)  # Default to week
+            # Build the query
+            query = 'is:unread in:inbox'
             
-            # Format the date for Gmail query
-            date_str = time_ago.strftime('%Y/%m/%d')
+            # Add date filter if provided
+            if after:
+                # Format date as YYYY/MM/DD
+                date_str = after.strftime('%Y/%m/%d')
+                query += f' after:{date_str}'
             
-            # Query for unread emails after the specified date
-            query = f'is:unread after:{date_str}'
-            
-            # Get the messages
-            results = service.users().messages().list(
+            # Get message IDs
+            results = self.service.users().messages().list(
                 userId='me',
                 q=query,
-                maxResults=50  # Limit to 50 emails
+                maxResults=100  # Limit to 100 messages
             ).execute()
             
+            # Extract message IDs
             messages = results.get('messages', [])
-            
-            if not messages:
-                return []
-            
-            # Process each message to get details
-            unread_emails = []
-            for message in messages:
-                msg = service.users().messages().get(
-                    userId='me',
-                    id=message['id'],
-                    format='metadata',
-                    metadataHeaders=['From', 'Subject', 'Date']
-                ).execute()
-                
-                # Extract headers
-                headers = {header['name']: header['value'] for header in msg['payload']['headers']}
-                
-                # Create email object
-                email_data = {
-                    'id': message['id'],
-                    'sender': headers.get('From', 'Unknown Sender'),
-                    'subject': headers.get('Subject', '(No Subject)'),
-                    'date': headers.get('Date', 'Unknown Date'),
-                    'snippet': msg.get('snippet', '')
-                }
-                
-                unread_emails.append(email_data)
-            
-            return unread_emails
+            return [msg['id'] for msg in messages]
             
         except Exception as e:
             logger.error(f"Error getting unread emails: {str(e)}")
@@ -336,34 +299,29 @@ class GmailHandler:
             return 0 
 
     def mark_as_read(self, message_id):
-        """Mark a message as read by removing UNREAD label"""
+        """Mark a message as read by removing the UNREAD label"""
         try:
-            # Create a new service instance for this request
-            service = build('gmail', 'v1', credentials=self.creds)
+            if not self.service:
+                self.setup_service()
             
-            service.users().messages().modify(
+            # Create the label modification object
+            mods = {
+                'removeLabelIds': ['UNREAD'],
+                'addLabelIds': []
+            }
+            
+            # Execute the modification
+            self.service.users().messages().modify(
                 userId='me',
                 id=message_id,
-                body={
-                    'removeLabelIds': ['UNREAD']
-                }
+                body=mods
             ).execute()
-            
-            logger.info(f"Marked message {message_id} as read")
-            
-            # Close the service connection
-            if hasattr(service, '_http'):
-                service._http.close()
             
             return True
             
         except Exception as e:
-            logger.error(f"Error marking message as read: {str(e)}")
+            logger.error(f"Error marking message {message_id} as read: {str(e)}")
             return False
-        finally:
-            # Ensure we clean up any remaining connections
-            if 'service' in locals() and hasattr(service, '_http'):
-                service._http.close() 
 
     def check_for_new_emails(self):
         """Check for new emails and process them
@@ -603,3 +561,9 @@ class GmailHandler:
             logger.error(f"Error processing message {message_id}: {str(e)}")
             print(f"ERROR processing message {message_id}: {str(e)}")
             return False 
+
+    def setup_service(self):
+        """Set up the Gmail service using existing credentials"""
+        if self.creds and not self.service:
+            self.service = build('gmail', 'v1', credentials=self.creds)
+        return self.service 

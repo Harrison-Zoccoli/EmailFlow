@@ -17,8 +17,12 @@
             <div class="rounded-md shadow-sm -space-y-px">
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700">Email</label>
-                    <input type="email" name="email" value="{{ email }}" readonly 
-                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-50">
+                    <input type="email" name="email" value="{{ email if email and email != 'None' else '' }}" 
+                           {% if email and email != 'None' %}readonly{% endif %}
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm {% if email and email != 'None' %}bg-gray-50{% endif %}">
+                    {% if not email or email == 'None' %}
+                    <p class="text-sm text-red-500 mt-1">Your email could not be retrieved automatically. Please enter your email address.</p>
+                    {% endif %}
                 </div>
                 <div class="mb-4">
                     <label class="block text-sm font-medium text-gray-700">Full Name</label>

@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template, redirect, url_for, session, request
+from flask import Flask, jsonify, render_template, redirect, url_for, session, request, Response
 from gmail_handler import GmailHandler
 from email_storage import EmailStorage
 from user_manager import UserManager
@@ -22,6 +22,9 @@ from googleapiclient.discovery import build
 from firebase_admin import firestore as admin_firestore
 from ai_scorer import AIScorer
 from firebase_config import db as firestore_db
+
+# Add this line to allow OAuth over HTTP (for development only)
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-here'  # Required for sessions
@@ -86,60 +89,94 @@ def login():
 
 @app.route('/google_login')
 def google_login():
-    """Start the Google OAuth flow for desktop client"""
+    """Start the Google OAuth flow"""
+    logger.info("Starting Google login process")
+    
+    # Create flow instance to manage the OAuth 2.0 Authorization Grant Flow
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        CREDENTIALS_FILE,
+        scopes=SCOPES)
+    
+    # Set the redirect URI
+    flow.redirect_uri = url_for('google_auth_callback', _external=True)
+    
+    # Generate URL for request to Google's OAuth 2.0 server
+    authorization_url, state = flow.authorization_url(
+        # Enable offline access so we can refresh an access token without
+        # re-prompting the user for permission
+        access_type='offline',
+        # Enable incremental authorization
+        include_granted_scopes='true')
+    
+    # Store the state in the session for later validation
+    session['state'] = state
+    
+    # Redirect the user to Google's OAuth 2.0 server
+    return redirect(authorization_url)
+
+@app.route('/google_auth_callback')
+def google_auth_callback():
+    """Handle the OAuth 2.0 callback from Google"""
+    # Specify the state when creating the flow in the callback
+    state = session.get('state')
+    
+    # Create flow instance to manage the OAuth 2.0 Authorization Grant Flow
+    flow = google_auth_oauthlib.flow.Flow.from_client_secrets_file(
+        CREDENTIALS_FILE,
+        scopes=SCOPES,
+        state=state)
+    flow.redirect_uri = url_for('google_auth_callback', _external=True)
+    
+    # Use the authorization server's response to fetch the OAuth 2.0 tokens
+    authorization_response = request.url
+    flow.fetch_token(authorization_response=authorization_response)
+    
+    # Store credentials in the session
+    credentials = flow.credentials
+    
+    # Get user email from Gmail API - FIX THIS PART
     try:
-        logger.info("Starting Google login process")
+        # Create Gmail service directly
+        service = build('gmail', 'v1', credentials=credentials)
+        profile = service.users().getProfile(userId='me').execute()
+        user_email = profile['emailAddress']
         
-        # Create a new GmailHandler instance for this login
-        global gmail_handler
-        gmail_handler = GmailHandler()
-        
-        # Run the desktop client flow - explicitly call it here
-        result = gmail_handler.setup_credentials()
-        logger.info(f"Authentication result: {result}")
-        
-        # Get user email after authentication
-        user_email = gmail_handler.get_user_email()
-        if not user_email:
-            logger.error("Failed to get user email after authentication")
-            session['error'] = "Failed to get user email"
-            return redirect(url_for('login'))
-            
-        session['user_email'] = user_email
-        logger.info(f"User authenticated with email: {user_email}")
+        # Store user email in session
+        if user_email:
+            session['user_email'] = user_email
+            print(f"Successfully retrieved and stored user email: {user_email}")
+        else:
+            print("Warning: Could not get user email from Gmail API")
+            return redirect(url_for('login', error="Could not retrieve your email address. Please try again."))
         
         # Check if user exists in database
-        if result == "new_user" or not user_manager.user_exists(user_email):
-            # New user, redirect to profile completion
-            logger.info(f"New user {user_email}, redirecting to complete_profile")
-            
-            # Create a new user in the database
-            user_manager.create_user(user_email)
-            
-            return redirect(url_for('complete_profile'))
+        logger.info(f"Checking if user {user_email} exists in database")
+        user_exists = user_manager.user_exists(user_email)
+        
+        # Store token in database
+        token_data = {
+            'token': credentials.token,
+            'refresh_token': credentials.refresh_token,
+            'token_uri': credentials.token_uri,
+            'client_id': credentials.client_id,
+            'client_secret': credentials.client_secret,
+            'scopes': credentials.scopes
+        }
+        
+        # Store token in database
+        user_manager.update_user(user_email, {'gmail_token': token_data})
+        
+        # If user doesn't exist, redirect to complete signup
+        if not user_exists:
+            logger.info(f"New user {user_email}, redirecting to complete signup")
+            return redirect(url_for('complete_signup'))
         else:
-            # Existing user, redirect to monitor
             logger.info(f"Existing user {user_email}, redirecting to monitor")
             return redirect(url_for('monitor'))
             
     except Exception as e:
-        logger.error(f"Error in Google login: {str(e)}")
-        session['error'] = str(e)
-        return redirect(url_for('login'))
-
-@app.route('/google_login_callback')
-def google_login_callback():
-    global gmail_handler, email_thread
-    
-    # Existing code for handling the OAuth callback...
-    
-    # Start the email checking thread if not already running
-    if email_thread is None or not email_thread.is_alive():
-        email_thread = threading.Thread(target=check_new_emails, daemon=True)
-        email_thread.start()
-        logger.info("Started background email checking thread")
-    
-    # Rest of the existing code...
+        logger.error(f"Error in Google auth callback: {str(e)}")
+        return redirect(url_for('login', error="Authentication error. Please try again."))
 
 @app.route('/logout')
 def logout():
@@ -241,27 +278,47 @@ def get_user():
 def signup():
     return render_template('signup.html', email=session.get('user_email'))
 
-@app.route('/complete_signup', methods=['POST'])
+@app.route('/complete_signup')
 @login_required
 def complete_signup():
-    global email_thread
-    email = session.get('user_email')
-    name = request.form.get('name')
-    phone = request.form.get('phone')
-    
-    user_manager.create_user(email, {
-        'email': email,
-        'name': name,
-        'phonenumber': phone
-    })
-    
-    # Start email checking thread if not already running
-    if email_thread is None or not email_thread.is_alive():
-        email_thread = threading.Thread(target=check_new_emails, daemon=True)
-        email_thread.start()
-        logger.info("Started background email checking thread after signup")
-    
-    return redirect(url_for('monitor'))
+    """Complete the signup process for new users"""
+    # Use the existing signup.html template instead of the missing complete_signup.html
+    return render_template('signup.html', email=session.get('user_email'))
+
+@app.route('/complete_signup', methods=['POST'])
+@login_required
+def process_signup():
+    """Process the signup form submission"""
+    try:
+        # Get email from session, not from form
+        user_email = session.get('user_email')
+        name = request.form.get('name')
+        phone = request.form.get('phone')
+        
+        logger.info(f"Processing signup for {user_email} with name {name} and phone {phone}")
+        
+        if not user_email or not name or not phone:
+            logger.error(f"Missing required fields in signup: email={user_email}, name={name}, phone={phone}")
+            return redirect(url_for('signup'))
+        
+        # Update user data in the database
+        user_data = {
+            'name': name,
+            'phonenumber': phone,
+            'email': user_email,
+            'created_at': admin_firestore.SERVER_TIMESTAMP
+        }
+        
+        # Create or update the user
+        user_manager.create_user(user_email, user_data)
+        logger.info(f"User profile completed for {user_email}")
+        
+        # Redirect to the monitor page
+        return redirect(url_for('monitor'))
+        
+    except Exception as e:
+        logger.error(f"Error processing signup: {str(e)}")
+        return redirect(url_for('signup'))
 
 def check_new_emails():
     """Background thread that continuously checks for new emails"""
@@ -335,54 +392,189 @@ def get_unread_emails_ajax():
 
 @app.route('/unread_emails/<filter>')
 @login_required
-def get_unread_emails(filter):
-    try:
-        total = gmail_handler.get_unread_count(filter)
-        logger.info(f"Found {total} unread emails for filter: {filter}")
-        processed = 0
-        errors = 0
-        
-        def generate():
-            nonlocal processed, errors
+def unread_emails(filter):
+    """Stream unread emails to the client"""
+    # Get user info BEFORE starting the generator
+    user_email = session.get('user_email')
+    user_data = user_manager.get_user(user_email)
+    
+    if not user_data or 'gmail_token' not in user_data:
+        return jsonify({
+            'type': 'error', 
+            'message': 'No Gmail token found. Please re-authenticate.',
+            'progress': {'processed': 0, 'total': 0}
+        })
+    
+    # Prepare credentials outside the generator
+    token_data = user_data.get('gmail_token')
+    
+    # Set up cutoff time based on filter
+    if filter == 'hour':
+        cutoff_time = datetime.now() - timedelta(hours=1)
+    elif filter == 'day':
+        cutoff_time = datetime.now() - timedelta(days=1)
+    elif filter == 'month':
+        cutoff_time = datetime.now() - timedelta(days=30)
+    else:  # Default to week
+        cutoff_time = datetime.now() - timedelta(days=7)
+    
+    # Create a profile reference if it exists
+    user_profile = None
+    ai_settings = user_data.get('ai_settings', {})
+    selected_model = ai_settings.get('selected_model', 'standard')
+    
+    if selected_model == 'enhanced':
+        profile = ai_settings.get('profile', {})
+        if profile.get('training_status') == 'completed':
+            user_profile = profile.get('profile_text')
+    
+    # Now define generator without Flask context dependencies
+    def generate():
+        try:
+            # Create credentials from stored token
+            creds = Credentials(
+                token=token_data.get('token'),
+                refresh_token=token_data.get('refresh_token'),
+                token_uri=token_data.get('token_uri'),
+                client_id=token_data.get('client_id'),
+                client_secret=token_data.get('client_secret'),
+                scopes=token_data.get('scopes')
+            )
             
-            for email in gmail_handler.get_filtered_unread_emails(filter):
-                if email:
+            # Set up Gmail handler
+            local_handler = GmailHandler()
+            local_handler.creds = creds
+            local_handler.setup_service()
+            
+            # Get unread message IDs
+            message_ids = local_handler.get_unread_emails(after=cutoff_time)
+            
+            total_emails = len(message_ids)
+            processed = 0
+            
+            if total_emails == 0:
+                yield json.dumps({
+                    'type': 'info', 
+                    'message': 'No unread emails found for this time period',
+                    'progress': {'processed': 0, 'total': 0}
+                }) + '\n'
+                return
+                
+            # Get AI scorer
+            ai_scorer = AIScorer(
+                os.getenv('AZURE_OPENAI_KEY'),
+                os.getenv('AZURE_OPENAI_ENDPOINT')
+            )
+            
+            # Process each email
+            for message_id in message_ids:
+                try:
+                    # Get the message
+                    message = local_handler.service.users().messages().get(
+                        userId='me', id=message_id).execute()
+                    
+                    # Extract message details
+                    headers = message.get('payload', {}).get('headers', [])
+                    subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+                    sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
+                    date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
+                    
+                    # Format date nicely
+                    try:
+                        # Parse email date format and convert to simple string
+                        from email.utils import parsedate_to_datetime
+                        date_obj = parsedate_to_datetime(date_str)
+                        date = date_obj.strftime('%b %d, %Y %I:%M %p')
+                    except:
+                        date = date_str
+                    
+                    # Get snippet
+                    snippet = message.get('snippet', '')
+                    
+                    # Score the email importance
+                    importance = ai_scorer.score_email({
+                        'sender': sender,
+                        'subject': subject,
+                        'snippet': snippet
+                    }, user_profile)
+                    
+                    # Create email data
+                    email_data = {
+                        'message_id': message_id,
+                        'subject': subject,
+                        'sender': sender,
+                        'date': date,
+                        'snippet': snippet,
+                        'importance': importance
+                    }
+                    
+                    # Update progress
                     processed += 1
-                    logger.info(f"Processed email {processed}/{total}")
+                    
+                    # Send the email data to the client
                     yield json.dumps({
                         'type': 'email',
-                        'data': email,
-                        'progress': {
-                            'processed': processed,
-                            'total': total,
-                            'errors': errors
-                        }
-                    }) + '\n'
-                else:
-                    errors += 1
-                    logger.warning(f"Failed to process email {processed + errors}/{total}")
-                    yield json.dumps({
-                        'type': 'error',
-                        'progress': {
-                            'processed': processed,
-                            'total': total,
-                            'errors': errors
-                        }
+                        'data': email_data,
+                        'progress': {'processed': processed, 'total': total_emails}
                     }) + '\n'
                     
-        return app.response_class(generate(), mimetype='text/event-stream')
-    except Exception as e:
-        logger.error(f"Error streaming emails: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+                except Exception as e:
+                    logger.error(f"Error processing message {message_id}: {str(e)}")
+                    yield json.dumps({
+                        'type': 'error',
+                        'message': f"Error processing email: {str(e)}",
+                        'progress': {'processed': processed, 'total': total_emails}
+                    }) + '\n'
+                    processed += 1
+                    
+        except Exception as e:
+            logger.error(f"Error streaming emails: {str(e)}")
+            yield json.dumps({
+                'type': 'error',
+                'message': f"Error: {str(e)}",
+                'progress': {'processed': 0, 'total': 0}
+            }) + '\n'
+            
+    return Response(generate(), mimetype='application/x-json-stream')
 
 @app.route('/mark_as_read/<message_id>', methods=['POST'])
 @login_required
 def mark_message_as_read(message_id):
     try:
-        if gmail_handler.mark_as_read(message_id):
+        # Get the current user's email from session
+        user_email = session.get('user_email')
+        
+        # Get user's credentials from database
+        user_data = user_manager.get_user(user_email)
+        
+        if not user_data or 'gmail_token' not in user_data:
+            logger.error(f"No token found for user {user_email}")
+            return jsonify({'error': 'No Gmail token found. Please re-authenticate.'}), 401
+        
+        # Create a new handler for this request
+        local_handler = GmailHandler()
+        
+        # Create credentials from stored token
+        token_data = user_data.get('gmail_token')
+        creds = Credentials(
+            token=token_data.get('token'),
+            refresh_token=token_data.get('refresh_token'),
+            token_uri=token_data.get('token_uri'),
+            client_id=token_data.get('client_id'),
+            client_secret=token_data.get('client_secret'),
+            scopes=token_data.get('scopes')
+        )
+        
+        # Setup handler with these credentials
+        local_handler.creds = creds
+        local_handler.setup_service()
+        
+        # Mark the message as read
+        if local_handler.mark_as_read(message_id):
             return jsonify({'status': 'success'})
         else:
             return jsonify({'error': 'Failed to mark message as read'}), 500
+            
     except Exception as e:
         logger.error(f"Error in mark_as_read route: {str(e)}")
         return jsonify({'error': str(e)}), 500

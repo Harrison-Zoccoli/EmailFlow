@@ -78,3 +78,7 @@ class UserManager:
         except Exception as e:
             logger.error(f"Error getting all users: {str(e)}")
             return [] 
+
+    def store_gmail_token(self, user_email, token_data):
+        """Store Gmail token for a user"""
+        return self.update_user(user_email, {'gmail_token': token_data}) 

@@ -140,8 +140,55 @@ class AIScorer:
                 ]
             )
             print(f"✅ API call successful with deployment: {self.deployment_name}")
-            result = json.loads(response.choices[0].message.content)
+            
+            # Add more robust JSON parsing with fallback
+            content = response.choices[0].message.content.strip()
+            try:
+                # First try to parse as-is
+                result = json.loads(content)
+            except json.JSONDecodeError:
+                # If that fails, try to extract JSON using regex
+                import re
+                json_match = re.search(r'({.*})', content, re.DOTALL)
+                if json_match:
+                    try:
+                        result = json.loads(json_match.group(1))
+                    except:
+                        # If regex extraction fails, create a default result
+                        # but try to extract a score if possible
+                        score_match = re.search(r'(\d+)(/10)?', content)
+                        score = int(score_match.group(1)) if score_match else 5
+                        result = {
+                            "score": score,
+                            "explanation": content
+                        }
+                else:
+                    # Default if no JSON-like structure is found
+                    result = {
+                        "score": 5,
+                        "explanation": content
+                    }
+            
+            # Validate the structure of the result
+            if not isinstance(result, dict) or 'score' not in result or 'explanation' not in result:
+                # Create a valid result structure
+                if isinstance(result, dict) and 'score' in result:
+                    score = result['score']
+                    explanation = result.get('explanation', 'No explanation provided')
+                elif isinstance(result, int) or (isinstance(result, str) and result.isdigit()):
+                    score = int(result)
+                    explanation = 'Score derived from AI analysis'
+                else:
+                    score = 5
+                    explanation = 'Invalid response format, using default score'
+                
+                result = {
+                    "score": score,
+                    "explanation": explanation
+                }
+            
             return result
+            
         except Exception as e:
             print(f"❌ API call failed with deployment: {self.deployment_name}")
             print(f"Error: {str(e)}")
