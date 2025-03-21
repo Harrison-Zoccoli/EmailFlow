@@ -22,6 +22,8 @@ from googleapiclient.discovery import build
 from firebase_admin import firestore as admin_firestore
 from ai_scorer import AIScorer
 from firebase_config import db as firestore_db
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 
 # Add this line to allow OAuth over HTTP (for development only)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -390,9 +392,9 @@ def get_unread_emails_ajax():
             'error': str(e)
         })
 
-@app.route('/unread_emails/<filter>')
+@app.route('/unread_emails/<timeframe>')
 @login_required
-def unread_emails(filter):
+def get_unread_emails(timeframe):
     """Stream unread emails to the client"""
     # Get user info BEFORE starting the generator
     user_email = session.get('user_email')
@@ -409,11 +411,11 @@ def unread_emails(filter):
     token_data = user_data.get('gmail_token')
     
     # Set up cutoff time based on filter
-    if filter == 'hour':
+    if timeframe == 'hour':
         cutoff_time = datetime.now() - timedelta(hours=1)
-    elif filter == 'day':
+    elif timeframe == 'day':
         cutoff_time = datetime.now() - timedelta(days=1)
-    elif filter == 'month':
+    elif timeframe == 'month':
         cutoff_time = datetime.now() - timedelta(days=30)
     else:  # Default to week
         cutoff_time = datetime.now() - timedelta(days=7)
@@ -446,87 +448,24 @@ def unread_emails(filter):
             local_handler.creds = creds
             local_handler.setup_service()
             
-            # Get unread message IDs
-            message_ids = local_handler.get_unread_emails(after=cutoff_time)
-            
-            total_emails = len(message_ids)
+            # Get the total number of unread emails
+            total_emails = local_handler.get_unread_count(timeframe)
             processed = 0
             
-            if total_emails == 0:
-                yield json.dumps({
-                    'type': 'info', 
-                    'message': 'No unread emails found for this time period',
-                    'progress': {'processed': 0, 'total': 0}
-                }) + '\n'
-                return
-                
-            # Get AI scorer
-            ai_scorer = AIScorer(
-                os.getenv('AZURE_OPENAI_KEY'),
-                os.getenv('AZURE_OPENAI_ENDPOINT')
-            )
-            
-            # Process each email
-            for message_id in message_ids:
-                try:
-                    # Get the message
-                    message = local_handler.service.users().messages().get(
-                        userId='me', id=message_id).execute()
+            # Process and yield emails one by one
+            for email in local_handler.get_filtered_unread_emails(timeframe):
+                if email:
+                    # Store in email_storage for later use with ratings
+                    email_storage.add_email(email)
                     
-                    # Extract message details
-                    headers = message.get('payload', {}).get('headers', [])
-                    subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
-                    sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
-                    date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
-                    
-                    # Format date nicely
-                    try:
-                        # Parse email date format and convert to simple string
-                        from email.utils import parsedate_to_datetime
-                        date_obj = parsedate_to_datetime(date_str)
-                        date = date_obj.strftime('%b %d, %Y %I:%M %p')
-                    except:
-                        date = date_str
-                    
-                    # Get snippet
-                    snippet = message.get('snippet', '')
-                    
-                    # Score the email importance
-                    importance = ai_scorer.score_email({
-                        'sender': sender,
-                        'subject': subject,
-                        'snippet': snippet
-                    }, user_profile)
-                    
-                    # Create email data
-                    email_data = {
-                        'message_id': message_id,
-                        'subject': subject,
-                        'sender': sender,
-                        'date': date,
-                        'snippet': snippet,
-                        'importance': importance
-                    }
-                    
-                    # Update progress
                     processed += 1
-                    
-                    # Send the email data to the client
-                    yield json.dumps({
+                    response_data = {
                         'type': 'email',
-                        'data': email_data,
+                        'data': email,
                         'progress': {'processed': processed, 'total': total_emails}
-                    }) + '\n'
-                    
-                except Exception as e:
-                    logger.error(f"Error processing message {message_id}: {str(e)}")
-                    yield json.dumps({
-                        'type': 'error',
-                        'message': f"Error processing email: {str(e)}",
-                        'progress': {'processed': processed, 'total': total_emails}
-                    }) + '\n'
-                    processed += 1
-                    
+                    }
+                    yield f"{json.dumps(response_data)}\n"
+            
         except Exception as e:
             logger.error(f"Error streaming emails: {str(e)}")
             yield json.dumps({
@@ -1187,6 +1126,125 @@ def reset_training_status():
     })
     
     return jsonify({'status': 'success'})
+
+@app.route('/submit_rating', methods=['POST'])
+def submit_rating():
+    if 'user_email' not in session:
+        return jsonify({'status': 'error', 'message': 'Not logged in'})
+        
+    data = request.json
+    message_id = data.get('message_id')
+    user_rating = data.get('user_rating')
+    
+    if not message_id or not user_rating:
+        return jsonify({'status': 'error', 'message': 'Missing required fields'})
+    
+    user_email = session['user_email']
+    target_email = None
+    
+    # Try to find email in storage
+    all_emails = email_storage.get_all_emails()
+    for email in all_emails:
+        if email.get('message_id') == message_id:
+            target_email = email
+            break
+    
+    # If not in storage, try to get it from Gmail API
+    if not target_email and gmail_handler.is_authenticated():
+        try:
+            email_data = gmail_handler.get_email_data(message_id)
+            if email_data:
+                target_email = email_data
+                email_storage.add_email(email_data)
+        except Exception as e:
+            logger.error(f"Error fetching email for rating: {str(e)}")
+    
+    if not target_email:
+        return jsonify({'status': 'error', 'message': 'Email not found'})
+    
+    # Get the email, AI score, and user's new score
+    email_data = target_email
+    ai_score = target_email.get('importance', {}).get('score', 5)
+    user_score = int(user_rating)
+    
+    # Get current user profile text
+    user_data = user_manager.get_user(user_email)
+    current_profile = user_data.get('ai_settings', {}).get('profile', {}).get('profile_text', '')
+    
+    # Update profile with the new rating information
+    ai_scorer = AIScorer(
+        os.getenv('AZURE_OPENAI_KEY'),
+        os.getenv('AZURE_OPENAI_ENDPOINT')
+    )
+    
+    updated_profile = ai_scorer.update_user_profile_with_rating(
+        email_data, 
+        ai_score, 
+        user_score, 
+        current_profile
+    )
+    
+    # Save the updated profile
+    user_manager.update_user(user_email, {
+        'ai_settings': {
+            'profile': {
+                'profile_text': updated_profile,
+                'training_status': 'completed'  # Ensure it's marked as completed
+            },
+            'selected_model': 'enhanced'  # Automatically select enhanced model
+        }
+    })
+    
+    # Extract AI score
+    ai_score = target_email.get('importance', {}).get('score', 5)
+    
+    # Calculate difference
+    difference = int(user_rating) - ai_score
+    
+    # Store rating in user data
+    try:
+        user_data = user_manager.get_user(user_email) or {}
+        
+        if 'rating_patterns' not in user_data:
+            user_data['rating_patterns'] = {
+                'total_ratings': 0,
+                'avg_difference': 0,
+                'ratings': []
+            }
+        
+        patterns = user_data['rating_patterns']
+        patterns['total_ratings'] += 1
+        
+        # Update average difference
+        if patterns['total_ratings'] > 1:
+            total_diff = (patterns['avg_difference'] * (patterns['total_ratings'] - 1)) + difference
+            patterns['avg_difference'] = total_diff / patterns['total_ratings']
+        else:
+            patterns['avg_difference'] = difference
+        
+        # Add this specific rating
+        patterns['ratings'].append({
+            'message_id': message_id,
+            'subject': target_email.get('subject', 'No Subject'),
+            'ai_score': ai_score,
+            'user_score': int(user_rating),
+            'difference': difference,
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        # Save updated user data
+        user_manager.update_user(user_email, {'rating_patterns': patterns})
+        
+        return jsonify({
+            'status': 'success', 
+            'difference': difference,
+            'ai_score': ai_score,
+            'message': 'Rating saved successfully'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error saving rating: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'Failed to save rating: {str(e)}'})
 
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")

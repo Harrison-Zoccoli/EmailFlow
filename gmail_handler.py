@@ -124,42 +124,70 @@ class GmailHandler:
             print(f"Error setting up push notifications: {str(e)}")
 
     def get_email_data(self, message_id):
-        max_retries = 3
-        retry_delay = 1  # seconds
-        
-        for attempt in range(max_retries):
+        """Get data for a single email message"""
+        try:
+            # Get the message
+            message = self.service.users().messages().get(userId='me', id=message_id).execute()
+            
+            # Extract message details
+            headers = message.get('payload', {}).get('headers', [])
+            subject = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'No Subject')
+            sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Unknown Sender')
+            date_str = next((h['value'] for h in headers if h['name'].lower() == 'date'), '')
+            
+            # Format date nicely
             try:
-                message = self.service.users().messages().get(
-                    userId='me', id=message_id, format='full').execute()
-                
-                headers = message['payload']['headers']
-                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-                sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
-                date = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-                
-                email_data = {
-                    'message_id': message_id,
-                    'subject': subject,
+                # Parse email date format and convert to simple string
+                from email.utils import parsedate_to_datetime
+                date_obj = parsedate_to_datetime(date_str)
+                date = date_obj.strftime('%b %d, %Y %I:%M %p')
+            except:
+                date = date_str
+            
+            # Get snippet
+            snippet = message.get('snippet', '')
+            
+            # Get user profile if needed for scoring
+            user_email = self.get_user_email()
+            user_data = user_manager.get_user(user_email) or {}
+            
+            # Check if user has enhanced AI model enabled
+            ai_settings = user_data.get('ai_settings', {})
+            user_profile = None
+            if ai_settings.get('selected_model') == 'enhanced':
+                profile = ai_settings.get('profile', {})
+                if profile.get('training_status') == 'completed':
+                    user_profile = profile.get('profile_text')
+            
+            # Get user's rating patterns
+            rating_patterns = user_data.get('rating_patterns', {})
+            
+            # Score the email importance
+            importance = self.ai_scorer.score_email(
+                {
                     'sender': sender,
-                    'date': date,
-                    'snippet': message.get('snippet', ''),
-                    'importance': self.ai_scorer.score_email({
-                        'sender': sender,
-                        'subject': subject,
-                        'snippet': message.get('snippet', '')
-                    })
-                }
-                return email_data
-                
-            except Exception as e:
-                logger.error(f"Attempt {attempt + 1}/{max_retries} failed for email {message_id}: {str(e)}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    # Try to refresh credentials
-                    if 'invalid credentials' in str(e).lower():
-                        self.setup_credentials()
-                else:
-                    return None
+                    'subject': subject,
+                    'snippet': snippet
+                }, 
+                user_profile,
+                rating_patterns
+            )
+            
+            # Create email data
+            email_data = {
+                'message_id': message_id,
+                'subject': subject,
+                'sender': sender,
+                'date': date,
+                'snippet': snippet,
+                'importance': importance
+            }
+            
+            return email_data
+            
+        except Exception as e:
+            logger.error(f"Error getting email data for {message_id}: {str(e)}")
+            return None
 
     def get_unread_emails(self, after=None):
         """Get unread emails, optionally filtered by date"""
@@ -240,7 +268,7 @@ class GmailHandler:
             return None
 
     def get_filtered_unread_emails(self, timeframe):
-        """Get unread emails within timeframe and process them one by one"""
+        """Get unread emails within timeframe using safer batch processing"""
         try:
             # Calculate time threshold based on filter
             now = datetime.now()
@@ -253,26 +281,34 @@ class GmailHandler:
             elif timeframe == 'month':
                 threshold = now - timedelta(days=30)
             
-            # Get unread emails
+            # Get unread message IDs in a single request
             results = self.service.users().messages().list(
                 userId='me',
                 labelIds=['UNREAD'],
-                q=f'after:{threshold.strftime("%Y/%m/%d")}'
+                q=f'after:{threshold.strftime("%Y/%m/%d")}',
+                maxResults=100
             ).execute()
             
-            messages = results.get('messages', [])
+            message_ids = [msg['id'] for msg in results.get('messages', [])]
             
-            # Process each message one at a time
-            for message in messages:
-                # Get email details
-                email_data = self.get_email_data(message['id'])
-                if email_data:
-                    # Yield each processed email immediately
-                    yield email_data
+            # Process in smaller batches without threading
+            batch_size = 5  # Smaller batch size to avoid SSL issues
+            
+            for i in range(0, len(message_ids), batch_size):
+                batch_ids = message_ids[i:i+batch_size]
                 
+                # Process each message in the batch sequentially
+                for msg_id in batch_ids:
+                    try:
+                        email_data = self.get_email_data(msg_id)
+                        if email_data:
+                            yield email_data
+                    except Exception as e:
+                        logger.error(f"Error processing email {msg_id}: {str(e)}")
+        
         except Exception as e:
             logger.error(f"Error getting filtered unread emails: {str(e)}")
-            yield None 
+            yield None
 
     def get_unread_count(self, timeframe):
         """Get total count of unread emails within timeframe"""
@@ -509,12 +545,19 @@ class GmailHandler:
                 if profile.get('training_status') == 'completed':
                     user_profile = profile.get('profile_text')
             
+            # Get user's rating patterns
+            rating_patterns = user_data.get('rating_patterns', {})
+            
             # Score the email importance
-            importance = self.ai_scorer.score_email({
-                'sender': sender,
-                'subject': subject,
-                'snippet': snippet
-            }, user_profile)
+            importance = self.ai_scorer.score_email(
+                {
+                    'sender': sender,
+                    'subject': subject,
+                    'snippet': snippet
+                }, 
+                user_profile,
+                rating_patterns
+            )
             
             print(f"Email from {sender}")
             print(f"Subject: {subject}")

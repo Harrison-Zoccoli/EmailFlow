@@ -139,7 +139,13 @@
                                        max="10" 
                                        class="w-16 px-2 py-1 border border-gray-300 rounded-md text-sm"
                                        placeholder="1-10"
+                                       id="user-rating-${email.message_id}"
                                        onchange="if(this.value > 10) this.value = 10; if(this.value < 1) this.value = 1;">
+                                <button class="bg-blue-600 text-white px-2 py-1 text-sm rounded hover:bg-blue-700"
+                                        onclick="submitRating('${email.message_id}')">
+                                    Rate
+                                </button>
+                                <span class="text-xs text-gray-500 ml-1">AI Score: <span class="font-semibold">${email.importance.score}/10</span></span>
                             </div>
                         </div>
                     </div>
@@ -193,6 +199,73 @@
             console.error('Error:', error);
             button.disabled = false;
             button.innerHTML = 'Mark as Read';
+        });
+    }
+
+    function submitRating(messageId) {
+        const ratingInput = document.getElementById(`user-rating-${messageId}`);
+        const userRating = parseInt(ratingInput.value);
+        
+        if (isNaN(userRating) || userRating < 1 || userRating > 10) {
+            alert('Please enter a valid rating between 1 and 10');
+            return;
+        }
+        
+        // Disable the input and button during submission
+        ratingInput.disabled = true;
+        const rateButton = ratingInput.nextElementSibling;
+        const originalButtonText = rateButton.innerHTML;
+        rateButton.disabled = true;
+        rateButton.innerHTML = 'Saving...';
+        
+        fetch('/submit_rating', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                message_id: messageId,
+                user_rating: userRating
+            }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                // Get the container that holds the input and button
+                const container = ratingInput.parentNode;
+                
+                // Replace with confirmation
+                container.innerHTML = `
+                    <span class="text-green-600 font-medium">Your rating: ${userRating}/10</span>
+                    <span class="text-xs text-gray-500 ml-2">AI Score: ${data.ai_score}/10</span>
+                `;
+                
+                // If there's a significant difference, show it
+                if (data.difference && Math.abs(data.difference) > 2) {
+                    const diffText = data.difference > 0 ? 
+                        `You rated this ${Math.abs(data.difference)} points higher than AI` : 
+                        `You rated this ${Math.abs(data.difference)} points lower than AI`;
+                        
+                    const diffElem = document.createElement('span');
+                    diffElem.className = 'text-xs text-gray-500 block mt-1';
+                    diffElem.textContent = diffText;
+                    container.appendChild(diffElem);
+                }
+            } else {
+                // Restore the input and button if there was an error
+                ratingInput.disabled = false;
+                rateButton.disabled = false;
+                rateButton.innerHTML = originalButtonText;
+                alert('Error saving rating: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            // Restore the input and button
+            ratingInput.disabled = false;
+            rateButton.disabled = false;
+            rateButton.innerHTML = originalButtonText;
+            alert('Failed to submit rating');
         });
     }
 
