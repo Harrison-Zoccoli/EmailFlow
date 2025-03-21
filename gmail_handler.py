@@ -29,20 +29,19 @@ user_manager = UserManager()
 
 class GmailHandler:
     # Class-level dictionary to store history IDs for each user
-    user_history_ids = {}
+    history_ids = {}
+    # Class-level cache for email data
+    email_cache = {}  # {user_email: {message_id: {email_data}}}
+    # Cache for unread counts
+    unread_count_cache = {}  # {user_email: {timeframe: {'count': count, 'timestamp': time}}}
     
-    def __init__(self):
-        self.creds = None
+    def __init__(self, credentials=None):
+        self.credentials = credentials
         self.service = None
-        self.ai_scorer = None
         self.last_history_id = None
-        
-        # Use environment variables instead of hardcoded keys
-        self.ai_scorer = AIScorer(
-            os.getenv('AZURE_OPENAI_KEY'),
-            os.getenv('AZURE_OPENAI_ENDPOINT')
-        )
-        print(f"Created AIScorer with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT')}")
+        self.ai_scorer = None
+        if self.credentials:
+            self.setup_service()
 
     def setup_credentials(self):
         """Set up Gmail API credentials"""
@@ -124,8 +123,15 @@ class GmailHandler:
             print(f"Error setting up push notifications: {str(e)}")
 
     def get_email_data(self, message_id):
-        """Get data for a single email message"""
+        """Get data for a single email message with caching"""
         try:
+            # Check cache first
+            user_email = self.get_user_email()
+            if user_email in self.email_cache and message_id in self.email_cache[user_email]:
+                print(f"📋 Cache hit for email {message_id}")
+                return self.email_cache[user_email][message_id]
+            
+            # Cache miss - get from Gmail API
             # Get the message
             message = self.service.users().messages().get(userId='me', id=message_id).execute()
             
@@ -148,7 +154,6 @@ class GmailHandler:
             snippet = message.get('snippet', '')
             
             # Get user profile if needed for scoring
-            user_email = self.get_user_email()
             user_data = user_manager.get_user(user_email) or {}
             
             # Check if user has enhanced AI model enabled
@@ -159,9 +164,6 @@ class GmailHandler:
                 if profile.get('training_status') == 'completed':
                     user_profile = profile.get('profile_text')
             
-            # Get user's rating patterns
-            rating_patterns = user_data.get('rating_patterns', {})
-            
             # Score the email importance
             importance = self.ai_scorer.score_email(
                 {
@@ -169,21 +171,28 @@ class GmailHandler:
                     'subject': subject,
                     'snippet': snippet
                 }, 
-                user_profile,
-                rating_patterns
+                user_profile
             )
             
-            # Create email data
-            email_data = {
-                'message_id': message_id,
-                'subject': subject,
+            # Store result in cache
+            if user_email not in self.email_cache:
+                self.email_cache[user_email] = {}
+            self.email_cache[user_email][message_id] = {
                 'sender': sender,
+                'subject': subject,
                 'date': date,
                 'snippet': snippet,
-                'importance': importance
+                'importance': importance,
+                'message_id': message_id
             }
             
-            return email_data
+            # Limit cache size (optional)
+            if len(self.email_cache[user_email]) > 1000:  # Keep last 1000 emails
+                # Remove oldest items (simple approach)
+                oldest_key = next(iter(self.email_cache[user_email]))
+                del self.email_cache[user_email][oldest_key]
+            
+            return self.email_cache[user_email][message_id]
             
         except Exception as e:
             logger.error(f"Error getting email data for {message_id}: {str(e)}")
@@ -268,28 +277,49 @@ class GmailHandler:
             return None
 
     def get_filtered_unread_emails(self, timeframe):
-        """Get unread emails within timeframe using safer batch processing"""
+        """Get unread emails within timeframe using caching and batch processing"""
         try:
-            # Calculate time threshold based on filter
-            now = datetime.now()
-            if timeframe == 'hour':
-                threshold = now - timedelta(hours=1)
-            elif timeframe == 'day':
-                threshold = now - timedelta(days=1)
-            elif timeframe == 'week':
-                threshold = now - timedelta(weeks=1)
-            elif timeframe == 'month':
-                threshold = now - timedelta(days=30)
+            # Get user email for cache key
+            user_email = self.get_user_email()
+            cache_key = f"unread_{timeframe}"
             
-            # Get unread message IDs in a single request
-            results = self.service.users().messages().list(
-                userId='me',
-                labelIds=['UNREAD'],
-                q=f'after:{threshold.strftime("%Y/%m/%d")}',
-                maxResults=100
-            ).execute()
-            
-            message_ids = [msg['id'] for msg in results.get('messages', [])]
+            # Check if we have a recent cache of message IDs
+            if (user_email in GmailHandler.email_cache and 
+                cache_key in GmailHandler.email_cache[user_email] and
+                (datetime.now() - GmailHandler.email_cache[user_email][cache_key]['timestamp']).total_seconds() < 300):  # Cache valid for 5 minutes
+                
+                print(f"📋 Using cached unread email IDs for {timeframe}")
+                message_ids = GmailHandler.email_cache[user_email][cache_key]['ids']
+            else:
+                # Calculate time threshold based on filter
+                now = datetime.now()
+                if timeframe == 'hour':
+                    threshold = now - timedelta(hours=1)
+                elif timeframe == 'day':
+                    threshold = now - timedelta(days=1)
+                elif timeframe == 'week':
+                    threshold = now - timedelta(weeks=1)
+                elif timeframe == 'month':
+                    threshold = now - timedelta(days=30)
+                
+                # Get unread message IDs in a single request
+                results = self.service.users().messages().list(
+                    userId='me',
+                    labelIds=['UNREAD'],
+                    q=f'after:{threshold.strftime("%Y/%m/%d")}',
+                    maxResults=100
+                ).execute()
+                
+                message_ids = [msg['id'] for msg in results.get('messages', [])]
+                
+                # Cache these IDs
+                if user_email not in GmailHandler.email_cache:
+                    GmailHandler.email_cache[user_email] = {}
+                
+                GmailHandler.email_cache[user_email][cache_key] = {
+                    'ids': message_ids,
+                    'timestamp': datetime.now()
+                }
             
             # Process in smaller batches without threading
             batch_size = 5  # Smaller batch size to avoid SSL issues
@@ -300,7 +330,7 @@ class GmailHandler:
                 # Process each message in the batch sequentially
                 for msg_id in batch_ids:
                     try:
-                        email_data = self.get_email_data(msg_id)
+                        email_data = self.get_email_data(msg_id)  # This now uses caching
                         if email_data:
                             yield email_data
                     except Exception as e:
@@ -311,9 +341,20 @@ class GmailHandler:
             yield None
 
     def get_unread_count(self, timeframe):
-        """Get total count of unread emails within timeframe"""
+        """Get total count of unread emails within timeframe with caching"""
         try:
+            user_email = self.get_user_email()
+            
+            # Check if we have a recent cache for this count
             now = datetime.now()
+            if (user_email in GmailHandler.unread_count_cache and 
+                timeframe in GmailHandler.unread_count_cache[user_email] and
+                (now - GmailHandler.unread_count_cache[user_email][timeframe]['timestamp']).total_seconds() < 300):  # Cache valid for 5 minutes
+                
+                print(f"📋 Using cached unread count for {timeframe}")
+                return GmailHandler.unread_count_cache[user_email][timeframe]['count']
+            
+            # Calculate threshold
             if timeframe == 'hour':
                 threshold = now - timedelta(hours=1)
             elif timeframe == 'day':
@@ -323,16 +364,28 @@ class GmailHandler:
             elif timeframe == 'month':
                 threshold = now - timedelta(days=30)
             
+            # Get the count
             results = self.service.users().messages().list(
                 userId='me',
                 labelIds=['UNREAD'],
                 q=f'after:{threshold.strftime("%Y/%m/%d")}'
             ).execute()
             
-            return len(results.get('messages', []))
+            count = len(results.get('messages', []))
+            
+            # Cache the result
+            if user_email not in GmailHandler.unread_count_cache:
+                GmailHandler.unread_count_cache[user_email] = {}
+            
+            GmailHandler.unread_count_cache[user_email][timeframe] = {
+                'count': count,
+                'timestamp': now
+            }
+            
+            return count
         except Exception as e:
             logger.error(f"Error getting unread count: {str(e)}")
-            return 0 
+            return 0
 
     def mark_as_read(self, message_id):
         """Mark a message as read by removing the UNREAD label"""
@@ -379,12 +432,12 @@ class GmailHandler:
                 return False
             
             # Get the last history ID for this user
-            last_history_id = GmailHandler.user_history_ids.get(user_email)
+            last_history_id = GmailHandler.history_ids.get(user_email)
             
             # If this is the first check, store the history ID and return
             if not last_history_id:
                 logger.info(f"First check - storing history ID for future reference")
-                GmailHandler.user_history_ids[user_email] = current_history_id
+                GmailHandler.history_ids[user_email] = current_history_id
                 return False
             
             # If the history ID hasn't changed, no new emails
@@ -403,7 +456,7 @@ class GmailHandler:
             ).execute()
             
             # Update the stored history ID
-            GmailHandler.user_history_ids[user_email] = current_history_id
+            GmailHandler.history_ids[user_email] = current_history_id
             
             # Check if there are any history records
             if 'history' not in history_results:
@@ -436,7 +489,7 @@ class GmailHandler:
         """Get the latest history ID for the user's mailbox"""
         try:
             # Create a new service instance for this request
-            service = build('gmail', 'v1', credentials=self.creds)
+            service = build('gmail', 'v1', credentials=self.credentials)
             
             # Get the profile which includes the historyId
             profile = service.users().getProfile(userId='me').execute()
@@ -463,7 +516,7 @@ class GmailHandler:
         
         try:
             # Create a new service instance for this request
-            service = build('gmail', 'v1', credentials=self.creds)
+            service = build('gmail', 'v1', credentials=self.credentials)
             
             # Get history with the last history ID
             history = service.users().history().list(
@@ -545,9 +598,6 @@ class GmailHandler:
                 if profile.get('training_status') == 'completed':
                     user_profile = profile.get('profile_text')
             
-            # Get user's rating patterns
-            rating_patterns = user_data.get('rating_patterns', {})
-            
             # Score the email importance
             importance = self.ai_scorer.score_email(
                 {
@@ -555,8 +605,7 @@ class GmailHandler:
                     'subject': subject,
                     'snippet': snippet
                 }, 
-                user_profile,
-                rating_patterns
+                user_profile
             )
             
             print(f"Email from {sender}")
@@ -606,7 +655,37 @@ class GmailHandler:
             return False 
 
     def setup_service(self):
-        """Set up the Gmail service using existing credentials"""
-        if self.creds and not self.service:
-            self.service = build('gmail', 'v1', credentials=self.creds)
-        return self.service 
+        """Set up Gmail API service"""
+        try:
+            if self.credentials:
+                # Convert the stored credentials dictionary to a Credentials object if needed
+                if isinstance(self.credentials, dict):
+                    self.credentials = Credentials(
+                        token=self.credentials.get('token'),
+                        refresh_token=self.credentials.get('refresh_token'),
+                        token_uri=self.credentials.get('token_uri'),
+                        client_id=self.credentials.get('client_id'),
+                        client_secret=self.credentials.get('client_secret'),
+                        scopes=self.credentials.get('scopes')
+                    )
+                    
+                # Create the Gmail API service
+                self.service = build('gmail', 'v1', credentials=self.credentials)
+                
+                # Initialize AI scorer if needed
+                if not self.ai_scorer:
+                    self.ai_scorer = AIScorer(
+                        os.getenv('AZURE_OPENAI_KEY'),
+                        os.getenv('AZURE_OPENAI_ENDPOINT')
+                    )
+                    print(f"Created AIScorer with deployment: {os.getenv('AZURE_OPENAI_DEPLOYMENT')}")
+                
+                return True
+            else:
+                # No credentials provided
+                print("No credentials provided to GmailHandler")
+                return False
+            
+        except Exception as e:
+            print(f"Error setting up Gmail service: {str(e)}")
+            return False 

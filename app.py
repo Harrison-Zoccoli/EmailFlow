@@ -396,19 +396,29 @@ def get_unread_emails_ajax():
 @login_required
 def get_unread_emails(timeframe):
     """Stream unread emails to the client"""
-    # Get user info BEFORE starting the generator
+    # Get user email from session
     user_email = session.get('user_email')
+    if not user_email:
+        return jsonify({'error': 'Not logged in'})
+    
+    # Get user data including Gmail token
     user_data = user_manager.get_user(user_email)
-    
     if not user_data or 'gmail_token' not in user_data:
-        return jsonify({
-            'type': 'error', 
-            'message': 'No Gmail token found. Please re-authenticate.',
-            'progress': {'processed': 0, 'total': 0}
-        })
+        return jsonify({'error': 'No Gmail token found'})
     
-    # Prepare credentials outside the generator
-    token_data = user_data.get('gmail_token')
+    # Create credentials object
+    gmail_token = user_data.get('gmail_token')
+    creds = Credentials(
+        token=gmail_token.get('token'),
+        refresh_token=gmail_token.get('refresh_token'),
+        token_uri=gmail_token.get('token_uri'),
+        client_id=gmail_token.get('client_id'),
+        client_secret=gmail_token.get('client_secret'),
+        scopes=gmail_token.get('scopes')
+    )
+    
+    # Create GmailHandler with credentials
+    gmail_handler = GmailHandler(credentials=creds)
     
     # Set up cutoff time based on filter
     if timeframe == 'hour':
@@ -433,27 +443,12 @@ def get_unread_emails(timeframe):
     # Now define generator without Flask context dependencies
     def generate():
         try:
-            # Create credentials from stored token
-            creds = Credentials(
-                token=token_data.get('token'),
-                refresh_token=token_data.get('refresh_token'),
-                token_uri=token_data.get('token_uri'),
-                client_id=token_data.get('client_id'),
-                client_secret=token_data.get('client_secret'),
-                scopes=token_data.get('scopes')
-            )
-            
-            # Set up Gmail handler
-            local_handler = GmailHandler()
-            local_handler.creds = creds
-            local_handler.setup_service()
-            
             # Get the total number of unread emails
-            total_emails = local_handler.get_unread_count(timeframe)
+            total_emails = gmail_handler.get_unread_count(timeframe)
             processed = 0
             
             # Process and yield emails one by one
-            for email in local_handler.get_filtered_unread_emails(timeframe):
+            for email in gmail_handler.get_filtered_unread_emails(timeframe):
                 if email:
                     # Store in email_storage for later use with ratings
                     email_storage.add_email(email)
@@ -692,101 +687,68 @@ def check_email_thread_status():
             'error': 'Email checking thread is not running'
         })
 
-def check_emails_for_user(user_email, user_data, check_number):
+def check_emails_for_user(user_email, user_data):
     """Check emails for a specific user"""
     try:
+        # Get stored Gmail token
+        gmail_token = user_data.get('gmail_token')
+        if not gmail_token:
+            logger.error(f"No Gmail token found for user {user_email}")
+            return
+        
         # Create credentials from stored token
-        creds = create_credentials_from_token(user_data.get('gmail_token'))
-        
-        if not creds or not creds.valid:
-            logger.error(f"Invalid credentials for user {user_email}")
-            return False
-            
-        logger.info(f"Successfully created credentials for user {user_email}")
-        
-        # Create AI scorer
-        ai_scorer = AIScorer(
-            os.getenv('AZURE_OPENAI_KEY'),
-            os.getenv('AZURE_OPENAI_ENDPOINT')
+        creds = Credentials(
+            token=gmail_token.get('token'),
+            refresh_token=gmail_token.get('refresh_token'),
+            token_uri=gmail_token.get('token_uri'),
+            client_id=gmail_token.get('client_id'),
+            client_secret=gmail_token.get('client_secret'),
+            scopes=gmail_token.get('scopes')
         )
         
-        # Create Gmail handler with credentials
-        try:
-            # Get the user's selected model from Firebase
-            user_settings = user_manager.get_user(user_email)
-            selected_model = user_settings.get('ai_settings', {}).get('selected_model', 'standard')
-            
-            # Get user profile if enhanced model is selected
-            user_profile = None
-            if selected_model == 'enhanced':
-                user_profile = user_settings.get('ai_settings', {}).get('profile', {}).get('profile_text', None)
-                
-            # Log which model is being used - make it more prominent
-            print(f"\n{'=' * 40}")
-            print(f"📧 USING {selected_model.upper()} MODEL FOR {user_email}")
-            if selected_model == 'enhanced' and user_profile:
-                print(f"✅ User profile is available and will be used for scoring")
-            elif selected_model == 'enhanced' and not user_profile:
-                print(f"⚠️ Enhanced model selected but no user profile found")
-            print(f"{'=' * 40}\n")
-            
-            logger.info(f"Using {selected_model} model for user {user_email}")
-            
-            # Pass the selected model and user profile to the Gmail handler
-            gmail_handler = GmailHandler(creds, ai_scorer, selected_model=selected_model, user_profile=user_profile)
-        except TypeError:
-            # If it doesn't accept the selected_model parameter, try the old way
-            gmail_handler = GmailHandler()
-            gmail_handler.creds = creds
-            gmail_handler.ai_scorer = ai_scorer
-            gmail_handler.service = build('gmail', 'v1', credentials=creds)
-            
-            # Try to set the selected model if the attribute exists
-            if hasattr(gmail_handler, 'selected_model'):
-                user_settings = user_manager.get_user(user_email)
-                selected_model = user_settings.get('ai_settings', {}).get('selected_model', 'standard')
-                gmail_handler.selected_model = selected_model
-                
-                # Try to set the user profile if the attribute exists
-                if hasattr(gmail_handler, 'user_profile') and selected_model == 'enhanced':
-                    user_profile = user_settings.get('ai_settings', {}).get('profile', {}).get('profile_text', None)
-                    gmail_handler.user_profile = user_profile
-                
-                # Log which model is being used - make it more prominent
-                print(f"\n{'=' * 40}")
-                print(f"📧 USING {selected_model.upper()} MODEL FOR {user_email}")
-                if selected_model == 'enhanced' and user_profile:
-                    print(f"✅ User profile is available and will be used for scoring")
-                elif selected_model == 'enhanced' and not user_profile:
-                    print(f"⚠️ Enhanced model selected but no user profile found")
-                print(f"{'=' * 40}\n")
-                
-                logger.info(f"Using {selected_model} model for user {user_email}")
+        # Create GmailHandler with credentials
+        gmail_handler = GmailHandler(credentials=creds)
         
-        # Only log this once per check cycle instead of for each user
-        if user_email == first_valid_user:
-            logger.info(f"Check #{check_number}: Checking emails...")
+        # Log which model is being used
+        user_settings = user_data.get('ai_settings', {})
+        selected_model = user_settings.get('selected_model', 'standard')
+        
+        print(f"\n{'=' * 40}")
+        print(f"📧 USING {selected_model.upper()} MODEL FOR {user_email}")
+        
+        user_profile = None
+        if selected_model == 'enhanced':
+            user_profile = user_settings.get('profile', {}).get('profile_text')
+            if user_profile:
+                print(f"✅ User profile is available and will be used for scoring")
+            else:
+                print(f"⚠️ Enhanced model selected but no user profile found")
+        
+        print(f"{'=' * 40}\n")
+        logger.info(f"Using {selected_model} model for user {user_email}")
         
         # Check for new emails
         new_emails = gmail_handler.check_for_new_emails()
         
-        # Only log if there are new emails or if this is the first valid user
-        if new_emails or user_email == first_valid_user:
-            logger.info(f"User {user_email}: {'New emails found!' if new_emails else 'No new emails'}")
-        
-        # Update token in database if it was refreshed
-        if creds.token != user_data.get('gmail_token', {}).get('token'):
+        # Handle token refreshing - store updated token
+        if creds.token != gmail_token.get('token'):
             logger.info(f"Updated token for user {user_email}")
-            user_manager.update_gmail_token(user_email, {
+            
+            # Update the token in user_data
+            updated_token = {
                 'token': creds.token,
                 'refresh_token': creds.refresh_token,
                 'token_uri': creds.token_uri,
                 'client_id': creds.client_id,
                 'client_secret': creds.client_secret,
                 'scopes': creds.scopes
-            })
-        
-        return True
+            }
+            
+            # Update the user in the database directly
+            user_manager.update_user(user_email, {'gmail_token': updated_token})
+            
+        return new_emails
+            
     except Exception as e:
         logger.error(f"Error checking emails for user {user_email}: {str(e)}")
         return False
@@ -827,7 +789,7 @@ def background_email_checker():
             # Check emails for each valid user
             for user_email in valid_users:
                 user_data = users_dict.get(user_email, {})
-                check_emails_for_user(user_email, user_data, check_number)
+                check_emails_for_user(user_email, user_data)
             
             logger.info(f"Check #{check_number} complete. Sleeping for 20 seconds...")
             logger.info("==============================")
@@ -1189,62 +1151,14 @@ def submit_rating():
         'ai_settings': {
             'profile': {
                 'profile_text': updated_profile,
-                'training_status': 'completed'  # Ensure it's marked as completed
+                'training_status': 'completed'
             },
-            'selected_model': 'enhanced'  # Automatically select enhanced model
+            'selected_model': 'enhanced'
         }
     })
     
-    # Extract AI score
-    ai_score = target_email.get('importance', {}).get('score', 5)
-    
-    # Calculate difference
-    difference = int(user_rating) - ai_score
-    
-    # Store rating in user data
-    try:
-        user_data = user_manager.get_user(user_email) or {}
-        
-        if 'rating_patterns' not in user_data:
-            user_data['rating_patterns'] = {
-                'total_ratings': 0,
-                'avg_difference': 0,
-                'ratings': []
-            }
-        
-        patterns = user_data['rating_patterns']
-        patterns['total_ratings'] += 1
-        
-        # Update average difference
-        if patterns['total_ratings'] > 1:
-            total_diff = (patterns['avg_difference'] * (patterns['total_ratings'] - 1)) + difference
-            patterns['avg_difference'] = total_diff / patterns['total_ratings']
-        else:
-            patterns['avg_difference'] = difference
-        
-        # Add this specific rating
-        patterns['ratings'].append({
-            'message_id': message_id,
-            'subject': target_email.get('subject', 'No Subject'),
-            'ai_score': ai_score,
-            'user_score': int(user_rating),
-            'difference': difference,
-            'timestamp': datetime.now().isoformat()
-        })
-        
-        # Save updated user data
-        user_manager.update_user(user_email, {'rating_patterns': patterns})
-        
-        return jsonify({
-            'status': 'success', 
-            'difference': difference,
-            'ai_score': ai_score,
-            'message': 'Rating saved successfully'
-        })
-        
-    except Exception as e:
-        logger.error(f"Error saving rating: {str(e)}")
-        return jsonify({'status': 'error', 'message': f'Failed to save rating: {str(e)}'})
+    # Return success
+    return jsonify({'status': 'success'})
 
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")

@@ -11,6 +11,9 @@ class AIScorer:
             azure_endpoint=endpoint
         )
         self.deployment_name = os.getenv('AZURE_OPENAI_DEPLOYMENT')
+        
+        # Add scoring cache
+        self.score_cache = {}  # {email_hash: {'score': score, 'explanation': explanation}}
 
     def score_email_importance(self, email_data, selected_model='standard', user_profile=None, rating_patterns=None):
         """Score email importance using AI with rating adjustment"""
@@ -114,9 +117,23 @@ class AIScorer:
             print(f"Error: {str(e)}")
             return {"score": 5, "explanation": "Error processing score"}
 
+    def get_email_hash(self, email_data, user_profile=None):
+        """Create a unique hash for this email + profile combination"""
+        import hashlib
+        key = f"{email_data['sender']}|{email_data['subject']}|{email_data['snippet']}|{user_profile or ''}"
+        return hashlib.md5(key.encode()).hexdigest()
+
     def score_email(self, email_data, user_profile=None, rating_patterns=None):
-        """Score email importance from 1-10 with optional user profile and rating patterns"""
-        print(f"⚠️ Using deployment: {self.deployment_name}")
+        """Score email importance with caching"""
+        
+        # Check cache first (no need for rating_patterns condition anymore)
+        email_hash = self.get_email_hash(email_data, user_profile)
+        if email_hash in self.score_cache:
+            print(f"📋 Score cache hit!")
+            return self.score_cache[email_hash]
+        
+        # Normal scoring logic
+        print(f"⚠️ Cache miss - using deployment: {self.deployment_name}")
         
         # Base prompt
         prompt = f"""
@@ -160,21 +177,18 @@ class AIScorer:
             )
             print(f"✅ API call successful with deployment: {self.deployment_name}")
             
-            # Add more robust JSON parsing with fallback
+            # Parse JSON response
             content = response.choices[0].message.content.strip()
             try:
-                # First try to parse as-is
                 result = json.loads(content)
             except json.JSONDecodeError:
-                # If that fails, try to extract JSON using regex
+                # Fallback parsing (using regex)
                 import re
                 json_match = re.search(r'({.*})', content, re.DOTALL)
                 if json_match:
                     try:
                         result = json.loads(json_match.group(1))
                     except:
-                        # If regex extraction fails, create a default result
-                        # but try to extract a score if possible
                         score_match = re.search(r'(\d+)(/10)?', content)
                         score = int(score_match.group(1)) if score_match else 5
                         result = {
@@ -182,15 +196,13 @@ class AIScorer:
                             "explanation": content
                         }
                 else:
-                    # Default if no JSON-like structure is found
                     result = {
                         "score": 5,
                         "explanation": content
                     }
             
-            # Validate the structure of the result
+            # Validate result structure
             if not isinstance(result, dict) or 'score' not in result or 'explanation' not in result:
-                # Create a valid result structure
                 if isinstance(result, dict) and 'score' in result:
                     score = result['score']
                     explanation = result.get('explanation', 'No explanation provided')
@@ -206,23 +218,21 @@ class AIScorer:
                     "explanation": explanation
                 }
             
-            # At the end, apply rating adjustment if needed
-            if rating_patterns and 'avg_difference' in rating_patterns:
-                # Adjust score based on user's historical rating patterns
-                avg_difference = rating_patterns.get('avg_difference', 0)
-                adjusted_score = min(10, max(1, result['score'] + avg_difference))
-                
-                # Update explanation
-                result['original_score'] = result['score']
-                result['score'] = adjusted_score
-                result['explanation'] += f" (Score adjusted by {avg_difference} based on rating history)"
+            # Cache the result
+            email_hash = self.get_email_hash(email_data, user_profile)
+            self.score_cache[email_hash] = result.copy()
+            
+            # Limit cache size
+            if len(self.score_cache) > 500:  # Keep last 500 scores
+                oldest_key = next(iter(self.score_cache))
+                del self.score_cache[oldest_key]
             
             return result
             
         except Exception as e:
             print(f"❌ API call failed with deployment: {self.deployment_name}")
             print(f"Error: {str(e)}")
-            return {"score": 5, "explanation": "Error processing score"} 
+            return {"score": 5, "explanation": "Error processing score"}
 
     def update_user_profile_with_rating(self, email_data, ai_score, user_score, current_profile):
         """Update user profile based on a new rating"""
